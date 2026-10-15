@@ -11,7 +11,9 @@ import { byLocalName } from "../math/mathml";
 import { DEFAULT_SHAPE_STYLE, isKnownShape, NONE, TEXT_BOX } from "../../editor/shapes/catalog";
 import type { Gradient, Shadow } from "../../editor/shapes/types";
 import { sanitizeHeaderFooter, type HeaderFooterSettings } from "../../pagination/headerFooter";
-import type { PageSetup } from "../../state/types";
+import type { PageNumberFormat } from "../../pagination/pageNumber";
+import type { ColumnsSpec, PageSetup } from "../../state/types";
+import { DEFAULT_COLUMN_GAP_CM, MAX_COLUMNS } from "../../state/page";
 
 interface Style {
   name: string;
@@ -27,6 +29,8 @@ interface Style {
   borders?: Record<string, boolean>;
   cellShading?: string;
   cellBorderless?: boolean;
+  /** `style:page-number`: the paragraph restarts the page numbering at this number. */
+  pageNumber?: number;
   /** `style:master-page-name`: a paragraph with this style starts a new page with that master page (a new section). */
   masterPage?: string;
   /** Indents, spacing and page-flow options of the paragraph style. */
@@ -53,7 +57,7 @@ interface Ctx {
   /** `draw:gradient` definitions by name. */
   gradients?: Map<string, { style: string; start: string; end: string; angle: number }>;
   /** Master pages by name (paper, margins, headers and footers) and the one in effect while reading the body. */
-  masters?: Map<string, { page: PageSetup; hf: HeaderFooterSettings | undefined }>;
+  masters?: Map<string, { page: PageSetup; hf: HeaderFooterSettings | undefined; w: number; margins: { top: number; left: number; right: number } }>;
   currentMaster?: string;
   /** Headers and footers in effect (to tell whether a section has its own). */
   currentHf?: HeaderFooterSettings;
@@ -61,6 +65,15 @@ interface Ctx {
   page?: { w: number; margins: { top: number; left: number; right: number } };
   /** The `office:text` element being read (sections only start at its top level). */
   body?: Element;
+  /** The top-level `text:section` being read, with its columns (it does not start a new page by itself). */
+  sectionEl?: Element;
+  sectionCols?: Map<string, ColumnsSpec>;
+  /** Page setup in effect (what a continuous break repeats). */
+  currentPage?: PageSetup;
+  /** Columns of the `text:section` just entered, given to the break that opens it. */
+  openColumns?: ColumnsSpec;
+  /** Columns of a section that opens the document. */
+  startColumns?: ColumnsSpec;
   warnings: Set<string>;
 }
 
@@ -192,6 +205,7 @@ function collectStyles(docs: Document[], ctx: Ctx) {
         gfx: graphicProps(first(s, "style:graphic-properties")),
         layout: readLayout(pp),
         masterPage: s.getAttribute("style:master-page-name") || undefined,
+        pageNumber: /^\d+$/.test(pp?.getAttribute("style:page-number") ?? "") ? +pp!.getAttribute("style:page-number")! : undefined,
         rowHeightPx: rowProps ? px(rowProps.getAttribute("style:min-row-height") ?? rowProps.getAttribute("style:row-height")) ?? undefined : undefined,
         automatic: s.parentNode?.nodeName === "office:automatic-styles",
       });
@@ -598,16 +612,21 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
     switch (el.nodeName) {
       case "text:h": case "text:p": {
         // A paragraph whose style names another master page starts a new section (the empty ones only carry the mark).
-        if (container === ctx.body) {
+        if (container === ctx.body || container === ctx.sectionEl) {
           const mp = ctx.styles.get(el.getAttribute("text:style-name") ?? "")?.masterPage;
           const m = mp ? ctx.masters?.get(mp) : undefined;
           if (mp && m && mp !== ctx.currentMaster) {
             const hf = m.hf ?? ctx.currentHf ?? { header: {}, footer: {}, titlePage: false, evenOdd: false };
             const linked = JSON.stringify(hf) === JSON.stringify(ctx.currentHf ?? { header: {}, footer: {}, titlePage: false, evenOdd: false });
             quote = code = null;
-            out.push({ type: "sectionBreak", attrs: { page: m.page, hf: linked ? null : hf } });
+            const restart = ctx.styles.get(el.getAttribute("text:style-name") ?? "")?.pageNumber;
+            const pg: PageSetup = { ...m.page, ...(restart !== undefined ? { numberStart: restart } : {}), ...(ctx.openColumns ? { columns: ctx.openColumns } : {}) };
+            ctx.openColumns = undefined;
+            out.push({ type: "sectionBreak", attrs: { page: pg, hf: linked ? null : hf } });
+            ctx.currentPage = pg;
             ctx.currentMaster = mp;
             ctx.currentHf = hf;
+            ctx.page = { w: m.w, margins: m.margins }; // shapes of this section are placed against its own paper and margins
             if (!el.textContent?.trim() && !el.children.length) break;
           }
         }
@@ -636,7 +655,26 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
         break;
       }
       case "table:table": quote = code = null; out.push(convertTable(ctx, el)); break;
-      case "text:section": case "text:index-body": quote = code = null; out.push(...convertBlocks(ctx, el, listStyle, depth)); break;
+      case "text:section": {
+        const cols = container === ctx.body ? ctx.sectionCols?.get(el.getAttribute("text:style-name") ?? "") : undefined;
+        if (!cols) { quote = code = null; out.push(...convertBlocks(ctx, el, listStyle, depth)); break; }
+        // A section with columns: a continuous break opens it (a new page when its first paragraph names a master page) and another closes it.
+        quote = code = null;
+        const firstP = Array.from(el.children).find((c) => c.nodeName === "text:p" || c.nodeName === "text:h");
+        const mp = firstP ? ctx.styles.get(firstP.getAttribute("text:style-name") ?? "")?.masterPage : undefined;
+        const opensPage = !!mp && mp !== ctx.currentMaster && !!ctx.masters?.get(mp);
+        const base = ctx.currentPage ?? ({} as PageSetup);
+        if (out.length === 0 && !opensPage) ctx.startColumns = cols;
+        else if (!opensPage) { const pg = { ...base, columns: cols }; out.push({ type: "sectionBreak", attrs: { page: pg, hf: null, kind: "continuous" } }); ctx.currentPage = pg; }
+        else ctx.openColumns = cols;
+        ctx.sectionEl = el;
+        out.push(...convertBlocks(ctx, el, listStyle, depth));
+        ctx.sectionEl = undefined;
+        ctx.openColumns = undefined;
+        if (el.nextElementSibling) { const { columns, ...rest } = ctx.currentPage ?? ({} as PageSetup); void columns; ctx.currentPage = rest as PageSetup; out.push({ type: "sectionBreak", attrs: { page: ctx.currentPage, hf: null, kind: "continuous" } }); }
+        break;
+      }
+      case "text:index-body": quote = code = null; out.push(...convertBlocks(ctx, el, listStyle, depth)); break;
       case "text:table-of-content": ctx.warnings.add("Tables des matières : remplacées par leur dernier contenu généré."); out.push(...convertBlocks(ctx, first(el, "text:index-body") ?? el, listStyle, depth)); break;
       case "text:tracked-changes": ctx.warnings.add("Suivi des modifications : non pris en charge."); break;
       case "draw:frame": {
@@ -651,6 +689,8 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
   }
   return out;
 }
+
+const ODF_NUM_BACK: Record<string, PageNumberFormat> = { "1": "decimal", i: "lowerRoman", I: "upperRoman", a: "lowerLetter", A: "upperLetter" };
 
 function readHeadersFooters(ctx: Ctx, master: Element): HeaderFooterSettings | undefined {
   const out: HeaderFooterSettings = { header: {}, footer: {}, titlePage: false, evenOdd: false };
@@ -723,6 +763,9 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
         margins = { top: side("fo:margin-top"), left: side("fo:margin-left"), right: side("fo:margin-right") };
       }
     }
+    // Page numbers: the format is a property of the page layout.
+    const fmt = ODF_NUM_BACK[props?.getAttribute("style:num-format") ?? ""];
+    if (fmt && fmt !== "decimal") page = { ...page, numberFormat: fmt };
     return { page, w, margins };
   };
   const masterEls = styles ? Array.from(styles.getElementsByTagName("style:master-page")) : [];
@@ -733,7 +776,7 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
     const name = m.getAttribute("style:name") ?? "";
     const info = readMaster(m);
     infos.set(name, info);
-    ctx.masters.set(name, { page: info.page, hf: readHeadersFooters(ctx, m) });
+    ctx.masters.set(name, { page: info.page, hf: readHeadersFooters(ctx, m), w: info.w, margins: info.margins });
   }
   // The section the document starts in: the master page of its first paragraph, else the first master page.
   const firstPara = Array.from(text.children).find((c) => c.nodeName === "text:p" || c.nodeName === "text:h");
@@ -741,11 +784,23 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
   const startName = firstMp && ctx.masters.has(firstMp) ? firstMp : masterEls[0]?.getAttribute("style:name") ?? "";
   ctx.currentMaster = startName;
   const startInfo = infos.get(startName) ?? { page: pageFromDimensions(794, 1123, null, ctx.warnings), w: 794, margins: { top: 96, left: 96, right: 96 } };
-  const page = startInfo.page;
+  // The first paragraph may restart the numbering (`style:page-number`).
+  const firstStart = firstPara ? ctx.styles.get(firstPara.getAttribute("text:style-name") ?? "")?.pageNumber : undefined;
+  let page: PageSetup = firstStart !== undefined ? { ...startInfo.page, numberStart: firstStart } : startInfo.page;
   ctx.page = { w: startInfo.w, margins: startInfo.margins };
+  ctx.currentPage = page;
+  // Columns of `text:section`s (an automatic style of the section family).
+  ctx.sectionCols = new Map();
+  for (const st of [content, ...(styles ? [styles] : [])].flatMap((d) => Array.from(d.getElementsByTagName("style:style")))) {
+    if (st.getAttribute("style:family") !== "section") continue;
+    const c = first(st, "style:columns");
+    const n = c ? +(c.getAttribute("fo:column-count") ?? 1) : 1;
+    if (c && n >= 2) ctx.sectionCols.set(st.getAttribute("style:name") ?? "", { count: Math.min(MAX_COLUMNS, n), gapCm: Math.round(((px(c.getAttribute("fo:column-gap")) ?? DEFAULT_COLUMN_GAP_CM * 96 / 2.54) * 2.54 / 96) * 100) / 100, line: !!first(c, "style:column-sep") });
+  }
   const headerFooter = ctx.masters.get(startName)?.hf;
   ctx.currentHf = headerFooter;
   const blocks = convertBlocks(ctx, text, null, 0);
+  if (ctx.startColumns) page = { ...page, columns: ctx.startColumns };
 
   if (!hasVisibleContent(blocks)) {
     const hasSource = !!text.textContent?.trim() || text.getElementsByTagName("draw:image").length > 0 || text.getElementsByTagName("table:table").length > 0;

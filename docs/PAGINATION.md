@@ -46,7 +46,7 @@ Le zoom est un `transform: scale()` : la mise en page logique est identique à 2
 - Une ligne de tableau plus haute qu'une page, ou une image plus haute que la zone de texte, déborde au lieu d'être coupée.
 - Les lignes de tableau se coupent *entre* les lignes, jamais à l'intérieur d'une cellule ; les en-têtes de tableau ne
   sont pas répétés sur chaque page.
-- Pas de colonnes, de sections multiples, de notes de bas de page, d'images flottantes.
+- Pas de notes de bas de page ; colonnes : voir la section « Colonnes et saut continu ».
 - Pas de contrôle « lignes veuves/orphelines » ni « conserver avec le suivant » réglable par l'utilisateur.
 - L'impression passe par la boîte d'impression système (WebKitGTK) ; l'alignement des pages imprimées avec les coupures
   calculées n'est pas démontré par un test automatique.
@@ -96,9 +96,7 @@ pagination mesure alors le texte réellement reformaté dans cette largeur et re
 - **Filigrane** (`src/editor/watermark.ts`) : texte, couleur, taille, diagonale ou horizontale, opacité ; dessiné derrière le texte
   sur chaque page, imprimé. DOCX : forme VML `PowerPlusWaterMarkObject` dans l'en-tête (créé si besoin), relue à l'ouverture ;
   vérifié avec LibreOffice (rendu PDF), pas avec Word. **ODT : non écrit** (avertissement à l'enregistrement).
-- **Colonnes : non prises en charge.** Le moteur paginé suit un seul flux vertical par page ; deux colonnes demandent de répartir
-  chaque page en deux zones de texte (même chantier que les sections, mais avec le texte lui-même à couper). Le bouton est désactivé
-  avec cette explication. Pas de saut de colonne.
+- **Colonnes** : voir « Colonnes et saut continu » plus bas.
 
 ## Sections
 
@@ -118,8 +116,26 @@ propre papier, orientation, marges, en-têtes et pieds de page.
   « Identique à la section précédente ».
 - **Fichiers** : DOCX (`w:sectPr` par section, relues à l'ouverture ; héritage des en-têtes) et ODT (une page maître par section,
   `style:master-page-name` sur le premier paragraphe) ; vérifié avec LibreOffice dans les deux sens (tailles de page, en-têtes).
-  Les sauts « continu » de Word sont lus comme des sauts de section avec page suivante (avertissement). `.doc` passe par LibreOffice.
-- **Limites** : un seul type de saut (page suivante : pas de continu, page paire/impaire) ; la numérotation des pages est continue
-  (pas de redémarrage par section) ; **l'impression utilise le format de la première section** (avertissement affiché si les sections
-  diffèrent) — pour un résultat exact avec plusieurs formats, enregistrer en DOCX/ODT et imprimer depuis Word ou LibreOffice ; les
-  formes d'un fichier DOCX/ODT sont positionnées d'après la mise en page de la première section.
+  `.doc` passe par LibreOffice. Les sauts « page paire / impaire » de Word sont lus comme « page suivante » (avertissement).
+- **Numérotation** (Mise en page > N° de page, ou Insertion) : format (1, i, I, a, A) et « commencer à » par section ; sans réglage,
+  la numérotation continue la section précédente. DOCX `w:pgNumType`, ODT `style:num-format` + `style:page-number` ; vérifié avec LibreOffice.
+- **Impression** : les sections de formats différents s'impriment chacune à leur taille (règles `@page` nommées, une copie de la pile
+  de pages par série de pages de même format : `src/services/printSections.ts`). Vérifié en PDF avec Chrome ; l'impression native
+  de WebKitGTK n'a pas été testée.
+- **Formes importées** : positionnées d'après la feuille de leur propre section (marges et largeur de cette section).
+
+## Colonnes et saut continu
+
+- **Saut de section « continu »** (Mise en page > Sauts) : la section suivante commence sur la même page ; elle garde le papier, les
+  marges et les en-têtes de la précédente (seules les colonnes lui sont propres).
+- **Colonnes** (Mise en page > Colonnes) : 2 à 6 colonnes égales, espace réglable, ligne entre les colonnes. Elles s'appliquent à la
+  section du curseur ; pour des colonnes sur une partie de la page, insérer un saut continu avant et après.
+- **Moteur** : les blocs d'une section à colonnes sont mesurés à la largeur d'une colonne, puis placés en position absolue
+  (variables CSS `--col-x/y/w`) ; un espaceur occupe leur place dans le flux. Remplissage colonne après colonne, page après page ;
+  un paragraphe peut se couper entre deux colonnes d'une même page (boîte CSS multi-colonnes), jamais entre deux pages. Avant un saut
+  continu, les colonnes de la dernière page sont **équilibrées** (recherche dichotomique de la hauteur minimale).
+- **Fichiers** : DOCX `w:type continuous` + `w:cols` ; ODT `text:section` + `style:columns` ; vérifié avec LibreOffice dans les deux sens.
+  Colonnes de largeurs inégales : ramenées à des colonnes égales (avertissement).
+- **Limites** : listes, tableaux, citations et images plus hauts qu'une colonne débordent au lieu d'être coupés ; pas de saut de colonne ;
+  un paragraphe ne se coupe pas d'une page à l'autre dans une section à colonnes ; la dernière section à colonnes d'un document se
+  remplit colonne par colonne sans équilibrage (comme Word) ; impression des colonnes vérifiée seulement en PDF Chrome (pas dans Word).

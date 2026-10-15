@@ -1,6 +1,6 @@
 import { useEditorState, type Editor } from "@tiptap/react";
 import { paginationKey } from "./extension";
-import type { Sheet } from "./model";
+import type { Band, Sheet } from "./model";
 
 export interface PageInfo {
   /** Number of pages computed by the pagination engine. */
@@ -43,4 +43,9 @@ export function usePageInfo(editor: Editor | null, pitch: number): PageInfo {
 /** The sheets of the last layout (engine coordinates), empty until the first layout. */
 export function usePaginationSheets(editor: Editor | null): Sheet[] {
   return useEditorState({ editor, selector: ({ editor: e }) => (e ? paginationKey.getState(e.state)?.sheets ?? [] : []) }) ?? [];
+}
+
+/** The vertical rules between columns of the last layout (engine coordinates). */
+export function usePaginationBands(editor: Editor | null): Band[] {
+  return useEditorState({ editor, selector: ({ editor: e }) => (e ? paginationKey.getState(e.state)?.bands ?? [] : []) }) ?? [];
 }

@@ -1,5 +1,3 @@
-import { pageDimensions } from "./page";
-import { readSections } from "../editor/Sections";
 import { sanitizePage } from "../services/documents/sanitize";
 import { cleanStyles } from "../editor/docStyles";
 import { cleanWatermark } from "../editor/watermark";
@@ -193,15 +191,9 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
 
   const print = useCallback(() => {
     set({ view: "editor" });
-    // One print job has one paper size: sections of other sizes would be cut where the first section's pages end.
-    if (editor) {
-      const secs = readSections(editor.state.doc, stateRef.current.page, stateRef.current.headerFooter);
-      const dims = new Set(secs.map((s) => pageDimensions(s.page)).map((d) => `${d.w}x${d.h}`));
-      if (dims.size > 1) notify("Les sections n'ont pas toutes le même format : l'impression suit celui de la première section. Pour un résultat exact, enregistrez en DOCX ou ODT et imprimez depuis Word ou LibreOffice.", "info");
-    }
     // Let the editor view mount before the print dialog snapshots the page.
     setTimeout(() => void printPage().catch((e) => notify(`Impression impossible : ${errorMessage(e)}`, "error")), 150);
-  }, [set, notify, editor]);
+  }, [set, notify]);
 
   const quit = useCallback(
     () =>

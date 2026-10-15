@@ -26,16 +26,20 @@ export interface Measured {
  * Measures the natural layout (page-break spacers hidden by the caller) as atoms.
  * `origin` is the top of the content flow in client px and `scale` the current zoom.
  */
-export function collectAtoms(view: EditorView, origin: number, scale: number): Measured {
+export function collectAtoms(view: EditorView, origin: number, scale: number, columnSections: boolean[] = []): Measured {
   const atoms: Atom[] = [];
   const refs: AtomRef[] = [];
 
   let sectionCounter = 0;
-  view.state.doc.descendants((node, pos) => {
+  const doc = view.state.doc;
+  view.state.doc.descendants((node, pos, parent) => {
     const name = node.type.name;
     let kind: AtomKind | null = null;
+    // In a section with several columns the atoms are the top-level blocks (lists, tables… are placed whole).
+    const inColumns = parent === doc && name !== "sectionBreak" && !!columnSections[sectionCounter];
     if (name === "sectionBreak") kind = "section";
-    if (TEXT_BLOCKS.has(name)) kind = "text";
+    if (inColumns) kind = TEXT_BLOCKS.has(name) ? "text" : name === "pageBreak" ? "break" : "block";
+    else if (TEXT_BLOCKS.has(name)) kind = "text";
     else if (name === "tableRow") kind = "row";
     else if (name === "horizontalRule") kind = "block";
     else if (name === "pageBreak") kind = "break";
@@ -47,7 +51,7 @@ export function collectAtoms(view: EditorView, origin: number, scale: number): M
     if (el instanceof HTMLElement) {
       const r = el.getBoundingClientRect();
       const ref: AtomRef = { kind, pos, el, columns: 1, headers: [], lineStarts: [] };
-      const atom: Atom = { kind, ...(kind === "section" ? { section: ++sectionCounter } : {}), top: (r.top - origin) / scale, bottom: (r.bottom - origin) / scale, keepWithNext: name === "heading" || (kind === "text" && !!node.attrs.keepWithNext), ...(kind === "text" && node.attrs.pageBreakBefore ? { breakBefore: true } : {}), ...(kind === "text" && node.attrs.keepLines ? { keepLines: true } : {}) };
+      const atom: Atom = { kind, ...(kind === "section" ? { section: ++sectionCounter, ...(node.attrs.kind === "continuous" ? { continuous: true } : {}) } : {}), top: (r.top - origin) / scale, bottom: (r.bottom - origin) / scale, keepWithNext: name === "heading" || (kind === "text" && !!node.attrs.keepWithNext), ...(kind === "text" && node.attrs.pageBreakBefore ? { breakBefore: true } : {}), ...(kind === "text" && node.attrs.keepLines ? { keepLines: true } : {}) };
       if (kind === "row") ref.columns = Array.from((el as HTMLTableRowElement).cells ?? []).reduce((s, c) => s + (c.colSpan || 1), 0) || 1;
       if (kind === "row") {
         const headers = headerRowsAbove(el as HTMLTableRowElement);

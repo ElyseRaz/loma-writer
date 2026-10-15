@@ -1,5 +1,6 @@
+import { isPageNumberFormat } from "../../pagination/pageNumber";
 import { DEFAULT_PAGE, type PageSetup } from "../../state/types";
-import { CUSTOM_SIZE_LIMITS, MARGIN_PRESETS, MAX_MARGIN_CM, PAPER_SIZES, validatePage } from "../../state/page";
+import { DEFAULT_COLUMN_GAP_CM, MAX_COLUMNS, CUSTOM_SIZE_LIMITS, MARGIN_PRESETS, MAX_MARGIN_CM, PAPER_SIZES, validatePage } from "../../state/page";
 
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
@@ -27,6 +28,12 @@ export function sanitizePage(page: Partial<PageSetup> | undefined): PageSetup {
     out.gutterCm = page.gutterCm;
     if (page.gutterPos === "top") out.gutterPos = "top";
   }
+  const cols = page?.columns;
+  if (cols && Number.isInteger(cols.count) && cols.count >= 2 && cols.count <= MAX_COLUMNS) {
+    out.columns = { count: cols.count, gapCm: typeof cols.gapCm === "number" && Number.isFinite(cols.gapCm) && cols.gapCm >= 0 && cols.gapCm <= 5 ? +cols.gapCm.toFixed(2) : DEFAULT_COLUMN_GAP_CM, line: cols.line === true };
+  }
+  if (isPageNumberFormat(page?.numberFormat) && page.numberFormat !== "decimal") out.numberFormat = page.numberFormat;
+  if (typeof page?.numberStart === "number" && Number.isInteger(page.numberStart) && page.numberStart >= 0 && page.numberStart <= 99999) out.numberStart = page.numberStart;
   // A setup that leaves no room for text is never accepted from a file.
-  return validatePage(out).length ? { size: out.size, orientation: out.orientation, ...(out.customSizeCm ? { customSizeCm: out.customSizeCm } : {}), margins: DEFAULT_PAGE.margins } : out;
+  return validatePage(out).length ? { size: out.size, orientation: out.orientation, ...(out.customSizeCm ? { customSizeCm: out.customSizeCm } : {}), margins: DEFAULT_PAGE.margins, ...(out.numberFormat ? { numberFormat: out.numberFormat } : {}), ...(out.numberStart !== undefined ? { numberStart: out.numberStart } : {}), ...(out.columns ? { columns: out.columns } : {}) } : out;
 }

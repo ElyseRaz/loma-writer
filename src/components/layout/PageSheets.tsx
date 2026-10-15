@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef } from "react";
 import { pickHeaderFooter, sectionFor, type HeaderFooterContent, type HeaderFooterSettings, type SectionLayout } from "../../pagination/headerFooter";
 import type { Watermark } from "../../editor/watermark";
-import { PAGE_GAP, type PageGeometry, type Sheet } from "../../pagination/model";
+import { PAGE_GAP, type Band, type PageGeometry, type Sheet } from "../../pagination/model";
+import { displayedNumbers, formatPageNumber } from "../../pagination/pageNumber";
 import { headerFooterHtml, withPageNumbers } from "../../services/headerFooterHtml";
 
 export interface HeaderFooterHeights {
@@ -63,7 +64,7 @@ function WatermarkMark({ watermark: w }: { watermark: Watermark }) {
  * The white sheets drawn behind the text, one per page, with their header and footer. Each sheet has the size of its section; the
  * HTML comes from the editor schema (never from raw user markup).
  */
-export function PageSheets({ sheets, sections, geometries, onHeights, bounds = true, watermark = null }: {
+export function PageSheets({ sheets, sections, geometries, onHeights, bounds = true, watermark = null, bands = [] }: {
   sheets: Sheet[];
   sections: SheetSection[];
   /** Geometry of each section (used to measure its header and footer). */
@@ -72,17 +73,22 @@ export function PageSheets({ sheets, sections, geometries, onHeights, bounds = t
   onHeights: (index: number, h: HeaderFooterHeights) => void;
   bounds?: boolean;
   watermark?: Watermark | null;
+  /** Vertical rules between columns (engine coordinates, like the sheets). */
+  bands?: Band[];
 }) {
   const pages = sheets.length;
   let sumHeights = 0;
+  // Displayed page numbers: a section may restart them and show them in roman numerals or letters.
+  const numbers = displayedNumbers(sheets, sections.map((s) => s.page.numberStart));
   return (
     <>
       {sections.map((sec, i) => <Measure key={i} section={sectionFor(sec.page, sec.hf)} geometry={geometries[Math.min(i, geometries.length - 1)]} onHeights={(h) => onHeights(i, h)} />)}
       {sheets.map((sheet, i) => {
         const sec = sections[Math.min(sheet.section, sections.length - 1)];
         const layout = sectionFor(sec.page, sec.hf);
-        const header = pickHeaderFooter(layout.header, layout, sheet.indexInSection, i + 1);
-        const footer = pickHeaderFooter(layout.footer, layout, sheet.indexInSection, i + 1);
+        const shown = formatPageNumber(numbers[i], sec.page.numberFormat);
+        const header = pickHeaderFooter(layout.header, layout, sheet.indexInSection, numbers[i]);
+        const footer = pickHeaderFooter(layout.footer, layout, sheet.indexInSection, numbers[i]);
         const top = sumHeights;
         sumHeights += sheet.height;
         return (
@@ -98,9 +104,12 @@ export function PageSheets({ sheets, sections, geometries, onHeights, bounds = t
             style={{ left: sheet.left, top: `calc(${top}px + ${i} * var(--pg-gap, ${PAGE_GAP}px))`, width: sheet.width, height: sheet.height }}
           >
             {watermark && <WatermarkMark watermark={watermark} />}
+            {bands.filter((b) => b.page === i).flatMap((b) => Array.from({ length: b.count - 1 }, (_, c) => (
+              <span key={`${b.top}-${c}`} aria-hidden className="page-column-rule" style={{ left: b.left + (c + 1) * b.width + c * b.gap + b.gap / 2, top: b.top - sheet.top, height: b.height }} />
+            )))}
             {bounds && <TextBounds geometry={sheet} />}
-            {header && <div className="hf hf-body" style={{ top: 30, ...sideStyle(sheet) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(header.blocks), i + 1, pages) }} />}
-            {footer && <div className="hf hf-body" style={{ bottom: 30, ...sideStyle(sheet) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(footer.blocks), i + 1, pages) }} />}
+            {header && <div className="hf hf-body" style={{ top: 30, ...sideStyle(sheet) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(header.blocks), shown, pages) }} />}
+            {footer && <div className="hf hf-body" style={{ bottom: 30, ...sideStyle(sheet) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(footer.blocks), shown, pages) }} />}
           </div>
         );
       })}

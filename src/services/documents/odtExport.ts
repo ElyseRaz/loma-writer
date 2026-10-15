@@ -41,7 +41,11 @@ class Ctx {
   paraStyles = new Map<string, string>();
   /** Master page the next top-level paragraph must start (a new section), consumed by `para`. */
   pendingMaster: string | null = null;
+  /** Page number the next top-level paragraph restarts at (`style:page-number`). */
+  pendingStart: number | null = null;
+  sectionStyles: string[] = [];
   takeMaster(): string | null { const m = this.pendingMaster; this.pendingMaster = null; return m; }
+  takeStart(): number | null { const s = this.pendingStart; this.pendingStart = null; return s; }
   pictures: Array<{ name: string; bytes: Uint8Array }> = [];
   colStyles: string[] = [];
   graphicStyles: string[] = [];
@@ -91,7 +95,7 @@ class Ctx {
     return this.cellStyles.get(key)!;
   }
 
-  paraStyle(parent: string, align?: string, lineHeight?: string, deco?: { shading?: unknown; borders?: Record<string, boolean> | null; layout?: ParagraphLayout }, master?: string | null): string {
+  paraStyle(parent: string, align?: string, lineHeight?: string, deco?: { shading?: unknown; borders?: Record<string, boolean> | null; layout?: ParagraphLayout }, master?: string | null, pageNumber?: number | null): string {
     const sides = deco?.borders ? (["top", "right", "bottom", "left"] as const).filter((s) => deco.borders![s]).map((s) => `fo:border-${s}="0.75pt solid #6b7280"`) : [];
     const props = [
       align && align !== "left" ? `fo:text-align="${ALIGN[align] ?? "start"}"` : "",
@@ -100,6 +104,8 @@ class Ctx {
       ...sides,
       deco?.shading || sides.length ? 'fo:padding="0.08cm"' : "",
       ...layoutProps(deco?.layout),
+      // Restarts the page numbering at this paragraph (a property of the paragraph, not of the style element).
+      pageNumber ? `style:page-number="${pageNumber}"` : "",
     ].filter(Boolean).join(" ");
     const key = `${parent}|${props}|${master ?? ""}`;
     if (!this.paraStyles.has(key)) this.paraStyles.set(key, `${this.prefix}P${this.paraStyles.size + 1}`);
@@ -184,7 +190,7 @@ const lineHeightOf = (content: PM[] = []): string | undefined =>
 function para(ctx: Ctx, n: PM, parent = "Standard"): string {
   const lead = ctx.anchored.join("");
   ctx.anchored = [];
-  const style = ctx.paraStyle(n.type === "heading" ? `Heading_20_${n.attrs?.level ?? 1}` : parent, n.attrs?.textAlign as string | undefined, lineHeightOf(n.content), { shading: n.attrs?.shading, borders: n.attrs?.borders as Record<string, boolean> | null, layout: cleanLayout(n.attrs as never) }, ctx.takeMaster());
+  const style = ctx.paraStyle(n.type === "heading" ? `Heading_20_${n.attrs?.level ?? 1}` : parent, n.attrs?.textAlign as string | undefined, lineHeightOf(n.content), { shading: n.attrs?.shading, borders: n.attrs?.borders as Record<string, boolean> | null, layout: cleanLayout(n.attrs as never) }, ctx.takeMaster(), ctx.takeStart());
   const body = lead + inline(ctx, n.content);
   return n.type === "heading"
     ? `<text:h text:style-name="${style}" text:outline-level="${n.attrs?.level ?? 1}">${body}</text:h>`
@@ -298,7 +304,7 @@ function blocks(ctx: Ctx, nodes: PM[] = [], listStyle?: string): string {
   const flush = () => { if (ctx.anchored.length) { out += `<text:p text:style-name="${ctx.paraStyle("Standard")}">${ctx.anchored.join("")}</text:p>`; ctx.anchored = []; } };
   for (const n of nodes) {
     // A section starts with a paragraph carrying its master page; when it starts with something else, an empty one carries it.
-    if (ctx.pendingMaster && n.type !== "paragraph" && n.type !== "heading") out += `<text:p text:style-name="${ctx.paraStyle("Standard", undefined, undefined, undefined, ctx.takeMaster())}"/>`;
+    if ((ctx.pendingMaster || ctx.pendingStart !== null) && n.type !== "paragraph" && n.type !== "heading") out += `<text:p text:style-name="${ctx.paraStyle("Standard", undefined, undefined, undefined, ctx.takeMaster(), ctx.takeStart())}"/>`;
     if (n.type !== "paragraph" && n.type !== "heading" && n.type !== "shape" && n.type !== "shapeGroup") flush();
     switch (n.type) {
       case "paragraph": case "heading": out += para(ctx, n); break;
@@ -402,6 +408,7 @@ function automaticStyles(ctx: Ctx, model: DocumentModel): string {
       return `<style:style style:name="${name}" style:family="paragraph" style:parent-style-name="${parent}"${master ? ` style:master-page-name="${master}"` : ""}>${props ? `<style:paragraph-properties ${props}/>` : ""}</style:style>`;
     })
     .join("");
+  const sectionStyles = ctx.sectionStyles.join("");
   const cellStyles = [...ctx.cellStyles]
     .map(([key, name]) => {
       const c = JSON.parse(key) as { fill: string | null; top: string; bottom: string; left: string; right: string };
@@ -409,7 +416,7 @@ function automaticStyles(ctx: Ctx, model: DocumentModel): string {
       return `<style:style style:name="${name}" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" ${border}${c.fill ? ` fo:background-color="${esc(c.fill)}"` : ""}/></style:style>`;
     })
     .join("");
-  return `${textStyles}${paraStyles}${listStyles()}${ctx.colStyles.join("")}${cellStyles}${ctx.graphicStyles.join("")}
+  return `${textStyles}${paraStyles}${sectionStyles}${listStyles()}${ctx.colStyles.join("")}${cellStyles}${ctx.graphicStyles.join("")}
 <style:style style:name="PgBreak" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:break-after="page"/></style:style>
 <style:style style:name="Tbl" style:family="table"><style:table-properties style:width="${pxToCm(pageDimensions(model.page).w - marginsPx(model.page).left - marginsPx(model.page).right)}cm" table:align="margins"/></style:style>
 <style:style style:name="Cell" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #000000"/></style:style>
@@ -422,7 +429,11 @@ interface OdtSection {
   hf: HeaderFooterSettings | null;
   hfXml: string;
   nodes: PM[];
+  /** Starts on the page of the previous section (no master page of its own). */
+  continuous: boolean;
 }
+
+const ODF_NUM: Record<string, string> = { decimal: "1", lowerRoman: "i", upperRoman: "I", lowerLetter: "a", upperLetter: "A" };
 
 const masterName = (i: number) => (i === 0 ? "Standard" : `Section_${i + 1}`);
 
@@ -432,8 +443,9 @@ function pageLayout(sec: OdtSection, i: number): string {
   const [pw, ph] = sec.page.orientation === "landscape" ? [paper.height, paper.width] : [paper.width, paper.height];
   const mg = effectiveMarginsCm(sec.page);
   const usage = isMirrored(sec.page) ? ' style:page-usage="mirrored"' : "";
+  const numFormat = sec.page.numberFormat && sec.page.numberFormat !== "decimal" ? ` style:num-format="${ODF_NUM[sec.page.numberFormat]}"` : "";
   const hf = sec.hf;
-  return `<style:page-layout style:name="pm${i + 1}"${usage}><style:page-layout-properties fo:page-width="${+pw.toFixed(3)}cm" fo:page-height="${+ph.toFixed(3)}cm" style:print-orientation="${sec.page.orientation}" fo:margin-top="${+mg.top.toFixed(3)}cm" fo:margin-bottom="${+mg.bottom.toFixed(3)}cm" fo:margin-left="${+mg.left.toFixed(3)}cm" fo:margin-right="${+mg.right.toFixed(3)}cm"/>${hf && hasContent(hf.header) ? '<style:header-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-bottom="0.3cm"/></style:header-style>' : ""}${hf && hasContent(hf.footer) ? '<style:footer-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-top="0.3cm"/></style:footer-style>' : ""}</style:page-layout>`;
+  return `<style:page-layout style:name="pm${i + 1}"${usage}><style:page-layout-properties fo:page-width="${+pw.toFixed(3)}cm" fo:page-height="${+ph.toFixed(3)}cm" style:print-orientation="${sec.page.orientation}"${numFormat} fo:margin-top="${+mg.top.toFixed(3)}cm" fo:margin-bottom="${+mg.bottom.toFixed(3)}cm" fo:margin-left="${+mg.left.toFixed(3)}cm" fo:margin-right="${+mg.right.toFixed(3)}cm"/>${hf && hasContent(hf.header) ? '<style:header-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-bottom="0.3cm"/></style:header-style>' : ""}${hf && hasContent(hf.footer) ? '<style:footer-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-top="0.3cm"/></style:footer-style>' : ""}</style:page-layout>`;
 }
 
 function namedStyles(model: DocumentModel, sections: OdtSection[], hfStyles: string, gradients: string): string {
@@ -479,18 +491,32 @@ export async function exportOdt(model: DocumentModel): Promise<ExportResult> {
   // Sections: the document's own setup, then one per section break (each with its master page; a section without headers of its own
   // repeats the previous ones, which is what ODF needs).
   const hfCtx = new Ctx("H"); // headers and footers live in styles.xml: they need their own style and picture namespace
-  const sections: OdtSection[] = [{ page: model.page, hf: model.headerFooter ?? null, hfXml: "", nodes: [] }];
+  const sections: OdtSection[] = [{ page: model.page, hf: model.headerFooter ?? null, hfXml: "", nodes: [], continuous: false }];
   for (const n of model.content.content ?? []) {
     if (n.type === SECTION_BREAK) {
       const prev = sections[sections.length - 1];
-      sections.push({ page: sanitizePage(n.attrs?.page as Partial<PageSetup>), hf: n.attrs?.hf ? sanitizeHeaderFooter(n.attrs.hf) : prev.hf, hfXml: "", nodes: [] });
+      const continuous = n.attrs?.kind === "continuous";
+      const own = sanitizePage(n.attrs?.page as Partial<PageSetup>);
+      let page = own;
+      if (continuous) { const { columns, ...rest } = prev.page; void columns; page = { ...rest, ...(own.columns ? { columns: own.columns } : {}) }; }
+      sections.push({ page, hf: !continuous && n.attrs?.hf ? sanitizeHeaderFooter(n.attrs.hf) : prev.hf, hfXml: "", nodes: [], continuous });
     } else sections[sections.length - 1].nodes.push(n);
   }
   let body = "";
   sections.forEach((sec, i) => {
-    ctx.pendingMaster = i > 0 ? masterName(i) : null;
-    body += blocks(ctx, sec.nodes);
-    if (ctx.pendingMaster) body += `<text:p text:style-name="${ctx.paraStyle("Standard", undefined, undefined, undefined, ctx.takeMaster())}"/>`; // an empty section still starts its page
+    // A restart needs the paragraph to name its master page (that is how ODF ties a page number change to a page).
+    ctx.pendingMaster = sec.continuous ? null : i > 0 || sec.page.numberStart !== undefined ? masterName(i) : null;
+    ctx.pendingStart = sec.continuous ? null : sec.page.numberStart ?? null;
+    let inner = blocks(ctx, sec.nodes);
+    if (ctx.pendingMaster || ctx.pendingStart !== null) inner += `<text:p text:style-name="${ctx.paraStyle("Standard", undefined, undefined, undefined, ctx.takeMaster(), ctx.takeStart())}"/>`; // an empty section still starts its page
+    // Columns are an ODF `text:section` around the blocks (a section without columns needs no wrapper).
+    const cols = sec.page.columns;
+    if (cols && inner) {
+      const name = `Sect${ctx.sectionStyles.length + 1}`;
+      ctx.sectionStyles.push(`<style:style style:name="${name}" style:family="section"><style:section-properties text:dont-balance-text-columns="false"><style:columns fo:column-count="${cols.count}" fo:column-gap="${+cols.gapCm.toFixed(3)}cm">${cols.line ? '<style:column-sep style:width="0.5pt" style:color="#808080" style:style="solid" style:height="100%"/>' : ""}${Array.from({ length: cols.count }, () => `<style:column style:rel-width="${Math.round(65535 / cols.count)}*" fo:start-indent="0cm" fo:end-indent="0cm"/>`).join("")}</style:columns></style:section-properties></style:style>`);
+      inner = `<text:section text:style-name="${name}" text:name="Section${ctx.sectionStyles.length}">${inner}</text:section>`;
+    }
+    body += inner;
     const hf = sec.hf;
     sec.hfXml = hf ? hfElements(hfCtx, "header", hf.header, hf.titlePage, hf.evenOdd) + hfElements(hfCtx, "footer", hf.footer, hf.titlePage, hf.evenOdd) : "";
   });

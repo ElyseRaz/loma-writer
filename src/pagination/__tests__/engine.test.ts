@@ -276,3 +276,93 @@ describe("sections", () => {
     expect(sh[1].top - sh[0].top).toBeCloseTo(portrait.pitch, 5);
   });
 });
+
+describe("columns", () => {
+  const two = pageGeometry({ ...DEFAULT_PAGE, columns: { count: 2, gapCm: 1, line: false } } as never);
+  const textW = two.width - two.insetLeft - two.insetRight;
+  const cw = (textW - two.columns!.gap) / 2;
+  /** Blocks of `n` lines, back to back (natural flow in a column of one column's width). */
+  const blocks = (counts: number[], opts: { split?: boolean } = {}): Atom[] => flow(counts).map((a) => (opts.split ? a : { ...a, keepLines: true }));
+
+  it("fills the first column, then the second, then the next page", () => {
+    // each block is 10 lines (LH * 10): a column holds ~ 931 / (10*LH + 10)
+    const atoms = blocks(Array(30).fill(10));
+    const res = paginate(atoms, two);
+    const pl = res.placements;
+    expect(pl.every((p) => p !== null)).toBe(true);
+    const cols = pl.map((p) => `${p!.page}:${p!.x === 0 ? 0 : 1}`);
+    // starts in column 0 of page 0, moves to column 1, then to page 1
+    expect(cols[0]).toBe("0:0");
+    expect(cols.some((c) => c === "0:1")).toBe(true);
+    expect(cols.some((c) => c.startsWith("1:"))).toBe(true);
+    // the second column is at the right of the first one
+    const right = pl.find((p) => p!.x > 0)!;
+    expect(right.x).toBeCloseTo(cw + two.columns!.gap, 5);
+    expect(right.width).toBeCloseTo(cw, 5);
+    // a block never starts below the bottom of the text area of its page
+    atoms.forEach((_a, i) => expect(pl[i]!.y).toBeLessThan(res.sheets[pl[i]!.page].top + res.sheets[pl[i]!.page].height - two.insetBottom));
+    // the tops of the first block of every column are the top of the text area
+    expect(pl[0]!.y).toBeCloseTo(0, 5);
+    expect(right.y).toBeCloseTo(0, 5);
+    expect(res.pages).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps the blocks of a column in order, one under the other", () => {
+    const atoms = blocks([4, 4, 4]);
+    const res = paginate(atoms, two);
+    const ys = res.placements.map((p) => p!.y);
+    expect(ys[1]).toBeGreaterThan(ys[0]);
+    expect(ys[2]).toBeGreaterThan(ys[1]);
+    // gaps are the natural ones (10 px between blocks in `flow`)
+    expect(ys[1] - (ys[0] + (atoms[0].bottom - atoms[0].top))).toBeCloseTo(10, 5);
+  });
+
+  it("splits a long paragraph across the columns of a page", () => {
+    const atoms = flow([8, 60]); // 60 lines do not fit in the rest of column 1 but fit in two columns
+    const res = paginate(atoms, two);
+    const p = res.placements[1]!;
+    expect(p.split).toBeDefined();
+    expect(p.split!.columns).toBe(2);
+    expect(p.width).toBeCloseTo(2 * cw + two.columns!.gap, 5);
+    expect(p.split!.offset).toBeGreaterThan(0); // it starts below the first paragraph in column 1
+    expect(p.x).toBe(0);
+  });
+
+  it("does not split across pages: a paragraph that would need a third column goes to the next page", () => {
+    const atoms = flow([8, 400]);
+    const res = paginate(atoms, two);
+    const p = res.placements[1]!;
+    expect(p.split).toBeUndefined();
+    expect(p.page).toBeGreaterThanOrEqual(0);
+  });
+
+  it("the spacer stands in for the region and the blocks after it follow the real end", () => {
+    const col = flow(Array(6).fill(10));
+    const after = flow([3], {}, col[col.length - 1].bottom + 12);
+    const sec: Atom = { kind: "section", top: col[col.length - 1].bottom + 4, bottom: col[col.length - 1].bottom + 8, section: 1, continuous: true };
+    const atoms = [...col, sec, ...after.map((a) => ({ ...a, top: a.top + 12, bottom: a.bottom + 12 }))];
+    const one = pageGeometry(DEFAULT_PAGE);
+    const res = paginate(atoms, [two, one]);
+    const region = res.breaks.find((b) => b.region)!;
+    expect(region.atom).toBe(0);
+    expect(region.spacer).toBeGreaterThan(0);
+    // balanced: the two columns of the last (only) page have about the same height
+    const ys = res.placements.slice(0, 6).map((p) => ({ x: p!.x, bottom: p!.y }));
+    const left = Math.max(...ys.filter((p) => p.x === 0).map((p) => p.bottom));
+    const right = Math.max(...ys.filter((p) => p.x > 0).map((p) => p.bottom));
+    expect(Math.abs(left - right)).toBeLessThan(10 * 24 + 12);
+    expect(right).toBeGreaterThan(0);
+    // the block after the continuous break is placed below the region, in the flow
+    const i = atoms.length - 1;
+    const real = atoms[i].top + appliedOffset(res.breaks, i);
+    const regionEnd = Math.max(...res.placements.slice(0, 6).map((p, k) => p!.y + (atoms[k].bottom - atoms[k].top)));
+    expect(real).toBeGreaterThan(regionEnd - 1);
+    expect(res.pages).toBe(1);
+  });
+
+  it("a section with one column is untouched by all this", () => {
+    const atoms = flow(Array(40).fill(8));
+    const plain = paginate(atoms, pageGeometry(DEFAULT_PAGE));
+    expect(plain.placements.every((p) => p === null)).toBe(true);
+  });
+});

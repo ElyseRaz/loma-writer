@@ -23,5 +23,5 @@ export function headerFooterHtml(blocks: HFBlock[]): string {
   return html;
 }
 
-export const withPageNumbers = (html: string, page: number, total: number) =>
+export const withPageNumbers = (html: string, page: number | string, total: number) =>
   html.replace(/<span[^>]*data-page-field="page"[^>]*>[^<]*<\/span>/g, String(page)).replace(/<span[^>]*data-page-field="pages"[^>]*>[^<]*<\/span>/g, String(total));

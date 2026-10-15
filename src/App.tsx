@@ -6,6 +6,8 @@ import { Backstage } from "./components/backstage/Backstage";
 import { CommandPalette } from "./components/dialogs/CommandPalette";
 import { HeaderFooterDialog } from "./components/dialogs/HeaderFooterDialog";
 import { PageSetupDialog } from "./components/dialogs/PageSetupDialog";
+import { ColumnsDialog } from "./components/dialogs/ColumnsDialog";
+import { PageNumberDialog } from "./components/dialogs/PageNumberDialog";
 import { WatermarkDialog } from "./components/dialogs/WatermarkDialog";
 import { ParagraphDialog } from "./components/dialogs/ParagraphDialog";
 import { StyleDialog } from "./components/dialogs/StyleDialog";
@@ -51,6 +53,8 @@ function Shell() {
       {state.dialog === "styles" && <StyleDialog />}
       {state.dialog === "paragraph" && <ParagraphDialog />}
       {state.dialog === "watermark" && <WatermarkDialog />}
+      {state.dialog === "pageNumber" && <PageNumberDialog />}
+      {state.dialog === "columns" && <ColumnsDialog />}
       {state.dialog === "tableSize" && <TableSizeDialog />}
       {(state.dialog === "margins" || state.dialog === "paper") && <PageSetupDialog key={state.dialog} initialTab={state.dialog === "paper" ? "paper" : "margins"} />}
       {state.dialog === "importReport" && <ImportReportDialog />}

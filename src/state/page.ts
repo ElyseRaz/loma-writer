@@ -95,7 +95,7 @@ export function marginsPx(p: PageSetup): { top: number; right: number; bottom: n
 }
 
 export interface PageProblem {
-  field: "width" | "height" | "top" | "bottom" | "left" | "right" | "gutter" | "text";
+  field: "width" | "height" | "top" | "bottom" | "left" | "right" | "gutter" | "text" | "columns" | "columnGap";
   message: string;
 }
 
@@ -116,11 +116,18 @@ export function validatePage(p: PageSetup): PageProblem[] {
   }
   const g = p.gutterCm ?? 0;
   if (!num(g) || g < 0 || g > MAX_MARGIN_CM) out.push({ field: "gutter", message: `La marge de reliure doit être comprise entre 0 et ${MAX_MARGIN_CM} cm.` });
+  if (p.columns) {
+    const c = p.columns;
+    if (!Number.isInteger(c.count) || c.count < 1 || c.count > MAX_COLUMNS) out.push({ field: "columns", message: `Le nombre de colonnes doit être compris entre 1 et ${MAX_COLUMNS}.` });
+    else if (!num(c.gapCm) || c.gapCm < 0 || c.gapCm > 5) out.push({ field: "columnGap", message: "L'espacement entre colonnes doit être compris entre 0 et 5 cm." });
+  }
   if (!out.length) {
     const e = effectiveMarginsCm(p);
     const [pw, ph] = p.orientation === "landscape" ? [height, width] : [width, height];
     if (pw - e.left - e.right < MIN_TEXT_CM) out.push({ field: "text", message: `Les marges laissent moins de ${MIN_TEXT_CM} cm de largeur pour le texte.` });
     if (ph - e.top - e.bottom < MIN_TEXT_CM) out.push({ field: "text", message: `Les marges laissent moins de ${MIN_TEXT_CM} cm de hauteur pour le texte.` });
+    const cw = columnWidthCm(p);
+    if (cw !== null && cw < MIN_COLUMN_CM) out.push({ field: "columns", message: `Chaque colonne doit mesurer au moins ${MIN_COLUMN_CM} cm de large : réduisez le nombre de colonnes ou leur espacement.` });
   }
   return out;
 }
@@ -143,6 +150,24 @@ export function fitMargins(p: PageSetup): PageSetup {
   const [left, right] = room(pw, m.left, m.right, g.pos === "left" ? g.cm : 0);
   const [top, bottom] = room(ph, m.top, m.bottom, g.pos === "top" ? g.cm : 0);
   return { ...p, margins: "custom", customMarginsCm: { top, bottom, left, right } };
+}
+
+export const MAX_COLUMNS = 6;
+export const DEFAULT_COLUMN_GAP_CM = 1.25;
+export const MIN_COLUMN_CM = 2;
+
+/** Width of the text area of a page, in cm (margins and binding margin removed). */
+export function textWidthCm(p: PageSetup): number {
+  const { width, height } = paperCm(p);
+  const e = effectiveMarginsCm(p);
+  return (p.orientation === "landscape" ? height : width) - e.left - e.right;
+}
+
+/** The width of one column in cm, or null when the section has a single column. */
+export function columnWidthCm(p: PageSetup): number | null {
+  const c = p.columns;
+  if (!c || c.count < 2) return null;
+  return (textWidthCm(p) - (c.count - 1) * c.gapCm) / c.count;
 }
 
 /** "21 × 29,7 cm" */

@@ -55,6 +55,7 @@ export function InsertTab() {
     { separator: true as const },
     ...PAGE_NUMBER_FORMATS.map((f) => ({ label: `Format : ${f.label} (bas de page, centré)`, onSelect: () => setPageNumber("footer", "center", f.text) })),
     { separator: true as const },
+    { label: "Format et numérotation des pages…", onSelect: () => set({ dialog: "pageNumber" }) },
     { label: "Supprimer les numéros de page", onSelect: clearPageNumbers },
   ];
 

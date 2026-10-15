@@ -4,13 +4,15 @@ import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { Editor } from "@tiptap/react";
 import { paginate } from "./engine";
 import { collectAtoms } from "./measure";
-import type { PageGeometry, Sheet } from "./model";
+import type { Band, PageGeometry, Sheet } from "./model";
 
 export interface PaginationState {
   decos: DecorationSet;
   pages: number;
   /** Where each page sheet is (engine coordinates: 0 = top of the text area of page 0). */
   sheets: Sheet[];
+  /** Rules between columns. */
+  bands: Band[];
   /** Signature of the layout the decorations encode; recomputed from the live decorations so edits invalidate it. */
   signature: string;
 }
@@ -24,7 +26,7 @@ interface SpacerSpec {
 
 /** Where the spacers really are now (after edits and undo/redo have moved or dropped them). */
 function signatureOf(pages: number, decos: DecorationSet): string {
-  const parts = decos.find().map((d) => `${(d.spec as SpacerSpec).kind}@${d.from}:${(d.spec as SpacerSpec).spacer.toFixed(1)}:${(d.spec as SpacerSpec).target.toFixed(1)}`);
+  const parts = decos.find().filter((d) => (d.spec as SpacerSpec | undefined)?.kind !== undefined).map((d) => `${(d.spec as SpacerSpec).kind}@${d.from}:${(d.spec as SpacerSpec).spacer.toFixed(1)}:${(d.spec as SpacerSpec).target.toFixed(1)}`);
   return `${pages}|${parts.join(",")}`;
 }
 
@@ -79,13 +81,19 @@ function headerCopy(row: HTMLTableRowElement): HTMLElement {
   return el;
 }
 
-function spacer(kind: "block" | "inline" | "row", height: number, target: number, columns: number, repeats = false): HTMLElement {
+function spacer(kind: "block" | "inline" | "row", height: number, target: number, columns: number, repeats = false, region?: { margin: number; pages: number }): HTMLElement {
   const el = document.createElement(kind === "row" ? "tr" : kind === "inline" ? "span" : "div");
   el.className = `pg-spacer pg-${kind}`;
   el.setAttribute("aria-hidden", "true");
   el.contentEditable = "false";
   el.dataset.target = String(target);
   if (repeats) el.dataset.repeats = "1";
+  if (region) {
+    // The blocks of a column region are drawn out of the flow: this spacer is as tall as the region, with the gap that followed it.
+    el.dataset.region = "1";
+    el.style.marginBottom = `${region.margin}px`;
+    el.style.setProperty("--k", String(Math.max(1, region.pages)));
+  }
   setHeight(el, height);
   if (kind === "row") {
     const td = document.createElement("td");
@@ -121,9 +129,9 @@ export const Pagination = Extension.create({
       new Plugin<PaginationState>({
         key: paginationKey,
         state: {
-          init: () => ({ decos: DecorationSet.empty, pages: 1, sheets: [], signature: "" }),
+          init: () => ({ decos: DecorationSet.empty, pages: 1, sheets: [], bands: [], signature: "" }),
           apply(tr, value) {
-            const meta = tr.getMeta(paginationKey) as { decos: DecorationSet; pages: number; sheets: Sheet[]; signature: string } | undefined;
+            const meta = tr.getMeta(paginationKey) as { decos: DecorationSet; pages: number; sheets: Sheet[]; bands: Band[]; signature: string } | undefined;
             if (meta && "decos" in meta) return meta;
             if (!tr.docChanged) return value;
             const decos = value.decos.map(tr.mapping, tr.doc);
@@ -196,7 +204,12 @@ function sectionMargins(doc: import("@tiptap/pm/model").Node, geoms: PageGeometr
     if (n.type.name === "sectionBreak") section++;
     const g = geoms[Math.min(section, geoms.length - 1)];
     const left = (maxWidth - g.width) / 2 + g.insetLeft;
-    const right = (maxWidth - g.width) / 2 + g.insetRight;
+    let right = (maxWidth - g.width) / 2 + g.insetRight;
+    // With several columns the blocks are measured one column wide.
+    if (g.columns && g.columns.count > 1) {
+      const textW = g.width - g.insetLeft - g.insetRight;
+      right += textW - (textW - (g.columns.count - 1) * g.columns.gap) / g.columns.count;
+    }
     out.push(Decoration.node(off, off + n.nodeSize, { style: `--sec-l:${+left.toFixed(2)}px;--sec-r:${+right.toFixed(2)}px` }));
   });
   return out;
@@ -215,17 +228,17 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
   let atoms;
   try {
     const origin = view.dom.getBoundingClientRect().top;
-    ({ atoms, refs } = collectAtoms(view, origin, scale));
+    ({ atoms, refs } = collectAtoms(view, origin, scale, storage.geometries.map((g) => !!g.columns && g.columns.count > 1)));
     result = paginate(atoms, storage.geometries.length ? storage.geometries : geom);
   } finally {
     view.dom.classList.remove("pg-measuring");
   }
 
   // Merge breaks that land on the same position, and remember where each moved block must end up.
-  const merged = new Map<string, { pos: number; kind: "block" | "inline" | "row"; spacer: number; columns: number; target: number; headers: HTMLTableRowElement[] }>();
+  const merged = new Map<string, { pos: number; kind: "block" | "inline" | "row"; spacer: number; columns: number; target: number; headers: HTMLTableRowElement[]; region?: { margin: number; pages: number } }>();
   let offset = 0;
   for (const b of result.breaks) {
-    offset += b.spacer;
+    offset += b.net ?? b.spacer;
     const ref = refs[b.atom];
     const lines = b.line !== null ? atoms[b.atom].lines?.() : null;
     const pos = b.line === null ? ref.pos : ref.lineStarts[b.line];
@@ -234,13 +247,13 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
     const natural = b.line !== null && lines ? lines[b.line].top : atoms[b.atom].top;
     const key = `${kind}:${pos}`;
     const prev = merged.get(key);
-    merged.set(key, { pos, kind, spacer: (prev?.spacer ?? 0) + b.spacer, columns: ref.columns, target: natural + offset, headers: b.repeat ? ref.headers : [] });
+    merged.set(key, { pos, kind, spacer: (prev?.spacer ?? 0) + b.spacer, columns: ref.columns, target: natural + offset, headers: b.repeat ? ref.headers : [], ...(b.region ? { region: b.region } : {}) });
   }
 
   const widgets = [...merged.values()].flatMap((m) => [
-    Decoration.widget(m.pos, () => spacer(m.kind, m.spacer, m.target, m.columns, m.headers.length > 0), {
+    Decoration.widget(m.pos, () => spacer(m.kind, m.spacer, m.target, m.columns, m.headers.length > 0, m.region), {
       side: -2 - m.headers.length,
-      key: `pg:${m.kind}:${m.pos}:${m.spacer.toFixed(1)}:${m.target.toFixed(1)}:${m.headers.length}`,
+      key: `pg:${m.kind}:${m.pos}:${m.spacer.toFixed(1)}:${m.target.toFixed(1)}:${m.headers.length}${m.region ? `:r${m.region.margin.toFixed(1)}:${m.region.pages}` : ""}`,
       kind: m.kind,
       spacer: m.spacer,
       target: m.target,
@@ -260,11 +273,27 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
       }),
     ),
   ]);
-  const decos = DecorationSet.create(view.state.doc, widgets);
-  const signature = `${signatureOf(result.pages, decos)}|${JSON.stringify(result.sheets.map((s) => [Math.round(s.top * 10), s.width, s.height, s.section]))}`;
+  // The blocks of the columns: each one is drawn at its column slot (CSS variables, see the stylesheet).
+  const doc = view.state.doc;
+  const blockDecos: Decoration[] = [];
+  result.placements.forEach((pl, i) => {
+    if (!pl) return;
+    const pos = refs[i]?.pos;
+    const node = pos === undefined ? null : doc.nodeAt(pos);
+    if (!node) return;
+    const sheet = result.sheets[Math.min(pl.page, result.sheets.length - 1)];
+    // Left and right indents of a paragraph come out of the width of its box (its margins are kept).
+    const ind = (node.attrs.indentLeft || 0) + (node.attrs.indentRight || 0);
+    const width = Math.max(24, pl.width - ind * (96 / 2.54));
+    const vars = [`--col-x:${+(sheet.left + sheet.insetLeft + pl.x).toFixed(2)}px`, `--col-y:calc(${+pl.y.toFixed(2)}px - ${pl.page} * var(--pg-print-sub, 0px))`, `--col-w:${+width.toFixed(2)}px`];
+    if (pl.split) vars.push(`--col-m:${pl.split.columns}`, `--col-gap:${+pl.split.gap.toFixed(2)}px`, `--col-h:${+pl.split.height.toFixed(2)}px`, `--col-off:${+pl.split.offset.toFixed(2)}px`);
+    blockDecos.push(Decoration.node(pos, pos + node.nodeSize, { "data-col": "", ...(pl.split ? { "data-col-split": "" } : {}), style: vars.join(";") }));
+  });
+  const decos = DecorationSet.create(view.state.doc, [...widgets, ...blockDecos]);
+  const signature = `${signatureOf(result.pages, decos)}|${JSON.stringify(result.sheets.map((s) => [Math.round(s.top * 10), s.width, s.height, s.section]))}|${JSON.stringify(result.placements.map((p) => p && [p.page, Math.round(p.x), Math.round(p.y), Math.round(p.width), p.split?.columns ?? 0]))}|${JSON.stringify(result.bands.map((b) => [b.page, Math.round(b.top), Math.round(b.height)]))}`;
   const current = paginationKey.getState(view.state);
   if (current?.signature === signature && current.pages === result.pages) { window.dispatchEvent(new Event("loma:layout")); done(); return; }
-  view.dispatch(view.state.tr.setMeta(paginationKey, { decos, pages: result.pages, sheets: result.sheets, signature }).setMeta("addToHistory", false));
+  view.dispatch(view.state.tr.setMeta(paginationKey, { decos, pages: result.pages, sheets: result.sheets, bands: result.bands, signature }).setMeta("addToHistory", false));
   storage.onLayout?.(result.pages);
   window.dispatchEvent(new Event("loma:layout"));
   done();
@@ -278,7 +307,7 @@ function verify(view: EditorView, storage: Storage) {
   if (view.isDestroyed || !storage.geometry || view.dom.getClientRects().length === 0) return;
   const scale = storage.scale || 1;
   const origin = view.dom.getBoundingClientRect().top;
-  view.dom.querySelectorAll<HTMLElement>(".pg-spacer:not(.pg-header)").forEach((el) => {
+  view.dom.querySelectorAll<HTMLElement>(".pg-spacer:not(.pg-header):not([data-region])").forEach((el) => {
     const target = origin + +(el.dataset.target ?? 0) * scale;
     let next = el.classList.contains("pg-block") ? (el.nextElementSibling as HTMLElement | null) : null;
     if (el.dataset.repeats) { // the row follows the repeated header copies

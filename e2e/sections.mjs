@@ -1,7 +1,10 @@
 // End-to-end checks of sections: a section break starts a new page with its own paper, orientation and margins.
 //   Requires: `npm run dev` on :1420 and Chrome.   Run: node e2e/sections.mjs
 import { chromium } from "playwright-core";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const audit = readFileSync(new URL("./audit.js", import.meta.url), "utf8");
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/usr/bin/google-chrome", args: ["--no-sandbox"] });
@@ -111,6 +114,7 @@ await run(() => window.__lomaEditor.commands.setTextSelection(3));
 await menu("Sauts", "Saut de section (page suivante)");
 await settle();
 await run(() => { const e = window.__lomaEditor; let last = 0; e.state.doc.forEach((n, off) => { last = off; }); e.commands.setTextSelection(last + 3); });
+await settle(); // the ribbon follows the caret
 await menu("Orientation", /Paysage/);
 await run(() => { const e = window.__lomaEditor; e.commands.insertShape("rect"); });
 await settle();
@@ -126,6 +130,34 @@ const shapeAttrs = await run(() => { let a; window.__lomaEditor.state.doc.descen
 const onSheet = await run(() => { const st = document.querySelector(".page-stack"); const k = st.getBoundingClientRect().width / st.offsetWidth; const b = document.querySelector(".shape-box").getBoundingClientRect(); const sheetEls = [...document.querySelectorAll(".page-sheet")]; const hit = sheetEls.findIndex((s) => { const r = s.getBoundingClientRect(); return b.left >= r.left - 1 && b.right <= r.right + 1 && b.top >= r.top - 1 && b.bottom <= r.bottom + 1; }); return hit; });
 ok(shapeAttrs.wrap === "front" && onSheet === 1, `a shape moved in the landscape section stays inside its (landscape) sheet (sheet ${onSheet + 1}, y=${shapeAttrs.y})`);
 ok((await run(() => window.__lomaAudit())).problems.length === 0, "and the layout is still valid");
+
+// --- Printing sections of different sizes: every page has the size of its section ---
+await page.reload();
+await page.addScriptTag({ content: audit });
+await page.getByText("Document vierge").click();
+await page.waitForFunction(() => window.__lomaEditor);
+await page.getByRole("tab", { name: "Mise en page" }).click();
+await run((h) => window.__lomaEditor.commands.setContent(h), para("P1", 2) + para("P2", 2));
+await settle();
+await run(() => window.__lomaEditor.commands.setTextSelection(3));
+await menu("Sauts", "Saut de section (page suivante)");
+await settle();
+await run(() => { const e = window.__lomaEditor; let last = 0; e.state.doc.forEach((n, off) => { last = off; }); e.commands.setTextSelection(last + 3); });
+await settle();
+await menu("Orientation", /Paysage/);
+await settle();
+await run(() => window.dispatchEvent(new Event("beforeprint")));
+await page.emulateMedia({ media: "print" });
+const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
+await page.emulateMedia({ media: "screen" });
+await run(() => window.dispatchEvent(new Event("afterprint")));
+const dir = mkdtempSync(join(tmpdir(), "loma-print-"));
+writeFileSync(join(dir, "out.pdf"), pdf);
+let info = "";
+try { info = execFileSync("pdfinfo", ["-f", "1", "-l", "5", join(dir, "out.pdf")], { encoding: "utf8" }); } catch { /* poppler not installed: the check is skipped */ }
+const sizes = [...info.matchAll(/Page\s+\d+ size:\s+([\d.]+) x ([\d.]+)/g)].map((m) => `${Math.round(+m[1])}x${Math.round(+m[2])}`);
+ok(!info || sizes.join() === "596x842,842x596", `the printed pages have the size of their section (${sizes.join(" ") || "pdfinfo missing: skipped"}; sheets ${await sheets().then((x) => x.map((s) => s.slice(0, 2).join("x")).join(" "))})`);
+ok((await page.locator("#loma-print-root").count()) === 0, "and the print copies are removed afterwards");
 
 ok(errors.length === 0, "no page errors", errors.join(" | "));
 await browser.close();

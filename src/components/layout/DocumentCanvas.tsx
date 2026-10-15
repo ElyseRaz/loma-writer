@@ -9,7 +9,8 @@ import { useEditorSnapshot } from "../../editor/useEditorSnapshot";
 import { hasContent, reserveFor } from "../../pagination/headerFooter";
 import { pageGeometry } from "../../pagination/model";
 import { requestPagination, setPaginationInputs } from "../../pagination/extension";
-import { usePageInfo, usePaginationSheets } from "../../pagination/usePagination";
+import { installSectionPrint } from "../../services/printSections";
+import { usePageInfo, usePaginationBands, usePaginationSheets } from "../../pagination/usePagination";
 import type { Sheet } from "../../pagination/model";
 import { buildSections, readSectionBreaks, readSections, sectionIndexAt, type SectionInfo } from "../../editor/Sections";
 import { stylesCss } from "../../editor/docStyles";
@@ -54,6 +55,7 @@ export function DocumentCanvas() {
   const scale = state.zoom / 100;
   const { total } = usePageInfo(editor, geometry.pitch);
   const engineSheets = usePaginationSheets(editor);
+  const bands = usePaginationBands(editor);
   // Sheets in stack coordinates. Before the first layout there is one geometry and `total` pages.
   const sheets: Sheet[] = useMemo(() => {
     if (engineSheets.length) return engineSheets;
@@ -78,6 +80,9 @@ export function DocumentCanvas() {
   useEffect(() => {
     if (editor && state.view === "editor") requestAnimationFrame(() => requestPagination(editor));
   }, [editor, state.view, state.docRevision]);
+
+  // Documents whose sections have different paper sizes print through per-size copies (see printSections).
+  useEffect(() => installSectionPrint(), []);
 
   // Print uses the same page size as the document.
   useEffect(() => {
@@ -215,7 +220,7 @@ export function DocumentCanvas() {
       <div className="flex w-max min-w-full justify-center px-8 py-6">
         <div className="page-wrap relative shrink-0" style={{ width: maxWidth * scale, height: Math.max(stackHeight, contentHeight) * scale }}>
         <div ref={stackRef} className="page-stack absolute left-0 top-0 origin-top-left" style={{ width: maxWidth, minHeight: stackHeight, transform: `scale(${scale})`, ["--doc-font" as string]: state.prefs.fontFamily, ["--doc-size" as string]: `${state.prefs.fontSizePt}pt` }} data-pages={sheets.length} data-pitch={geometry.pitch} data-inset-left={geometry.insetLeft} data-inset-top={geometry.insetTop} data-sheets={JSON.stringify(sheets.map((s, i) => [Math.round(sheetTops[i] * 100) / 100, s.left, s.width, s.height]))}>
-          <PageSheets bounds={state.textBounds} watermark={state.watermark} sheets={sheets} sections={sections} geometries={geometries} onHeights={(i, h) => setHfs((cur) => (cur[i] && cur[i].header === h.header && cur[i].footer === h.footer ? cur : Object.assign([...cur], { [i]: h })))} />
+          <PageSheets bands={bands} bounds={state.textBounds} watermark={state.watermark} sheets={sheets} sections={sections} geometries={geometries} onHeights={(i, h) => setHfs((cur) => (cur[i] && cur[i].header === h.header && cur[i].footer === h.footer ? cur : Object.assign([...cur], { [i]: h })))} />
           <div
             className={`paper relative${state.marks ? " show-marks" : ""}${state.bookmarks ? "" : " hide-bookmarks"}${painter ? " painter-armed" : ""}`}
             onMouseUp={onMouseUp}

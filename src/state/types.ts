@@ -29,6 +29,21 @@ export interface PageSetup {
   /** Binding margin, added on the left (or at the top) of every page. */
   gutterCm?: number;
   gutterPos?: "left" | "top";
+  /** Page numbers of the section: format (decimal when absent) and the number its first page restarts at (numbering goes on when absent). */
+  numberFormat?: import("../pagination/pageNumber").PageNumberFormat;
+  numberStart?: number;
+  /** Text columns of the section (one column when absent). */
+  columns?: ColumnsSpec;
+}
+
+/** Equal-width text columns. */
+export interface ColumnsSpec {
+  /** 2 to 6. */
+  count: number;
+  /** Space between columns, in cm. */
+  gapCm: number;
+  /** A vertical line between the columns. */
+  line: boolean;
 }
 
 export interface Preferences {
@@ -54,7 +69,7 @@ export interface DocumentMeta {
   lossy: string[];
 }
 
-export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "paragraph" | "watermark" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | null;
+export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "paragraph" | "watermark" | "pageNumber" | "columns" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | null;
 
 export interface AppState {
   theme: ThemeMode;

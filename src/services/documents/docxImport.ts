@@ -1,9 +1,11 @@
+import type { PageNumberFormat } from "../../pagination/pageNumber";
 import { cleanWatermark, type Watermark } from "../../editor/watermark";
 import type { ParagraphLayout } from "../../editor/ParagraphFormat";
 import { builtinStyle, cleanStyles, STYLE_IDS, type DocStyles, type StyleDef as EditedStyle, type StyleId } from "../../editor/docStyles";
 import { bulletFromChar, numberFromFormat } from "./listFormats";
 import JSZip from "jszip";
 import { pageFromDimensions } from "./page";
+import { MAX_COLUMNS } from "../../state/page";
 import { mathmlOrOmmlLatex } from "./mathImport";
 import { ListBuilder, ensureBlocks, hasVisibleContent, heading, mergeText, paragraph, splitEquations, textNode, type PM, type RunProps } from "./pm";
 import { corrupt, DocumentError, type ImportResult } from "./types";
@@ -726,6 +728,8 @@ async function readHeadersFooters(ctx: Ctx, sectPr: Element, text: (path: string
   return clean;
 }
 
+const NUM_FMT: Record<string, PageNumberFormat> = { decimal: "decimal", upperRoman: "upperRoman", lowerRoman: "lowerRoman", upperLetter: "upperLetter", lowerLetter: "lowerLetter" };
+
 const VML_COLORS: Record<string, string> = { silver: "#c0c0c0", gray: "#808080", grey: "#808080", black: "#000000", red: "#ff0000", blue: "#0000ff", green: "#008000", orange: "#ffa500", lightgray: "#d3d3d3", darkgray: "#a9a9a9", white: "#ffffff", yellow: "#ffff00", purple: "#800080" };
 
 /** A text watermark: Word's PowerPlusWaterMarkObject (a VML WordArt shape) in a header part. */
@@ -794,10 +798,20 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
     if (sz?.getAttribute("w:orient") === "landscape" && w < h) [w, h] = [h, w];
     const twip = (name: string) => +(mar?.getAttribute(name) ?? 1440) / 15;
     const gutterPx = mar ? +(mar.getAttribute("w:gutter") ?? 0) / 15 : 0;
+    // Page numbers of the section (`w:pgNumType`).
+    const num = sectPr ? child(sectPr, "w:pgNumType") : null;
+    const fmt = NUM_FMT[attr(num, "w:fmt") ?? ""];
+    const startAttr = attr(num, "w:start");
+    const start = startAttr !== null && Number.isInteger(+startAttr) && +startAttr >= 0 ? +startAttr : undefined;
+    // Text columns (`w:cols`), equal widths.
+    const colsEl = sectPr ? child(sectPr, "w:cols") : null;
+    const colCount = colsEl ? +(colsEl.getAttribute("w:num") ?? colsEl.getElementsByTagName("w:col").length ?? 1) : 1;
+    const cols = colsEl && colCount >= 2 ? { count: Math.min(MAX_COLUMNS, colCount), gapCm: Math.round(+(colsEl.getAttribute("w:space") ?? 720) / 567 * 100) / 100, line: /^(1|true|on)$/.test(colsEl.getAttribute("w:sep") ?? "") } : undefined;
+    const page = pageFromDimensions(w, h, mar ? { top: twip("w:top"), right: twip("w:right"), bottom: twip("w:bottom"), left: twip("w:left") } : null, warnings, { mirrored, gutterPx, gutterTop });
     return {
       w,
       margins: { top: mar ? twip("w:top") : 96, left: mar ? twip("w:left") : 96, right: mar ? twip("w:right") : 96 },
-      page: pageFromDimensions(w, h, mar ? { top: twip("w:top"), right: twip("w:right"), bottom: twip("w:bottom"), left: twip("w:left") } : null, warnings, { mirrored, gutterPx, gutterTop }),
+      page: { ...page, ...(cols ? { columns: cols } : {}), ...(fmt && fmt !== "decimal" ? { numberFormat: fmt } : {}), ...(start !== undefined ? { numberStart: start } : {}) },
     };
   };
   const infos = (sectPrs.length ? sectPrs : [null]).map(sectInfo);
@@ -809,19 +823,28 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
     const any = (s: HeaderFooterSet) => !!(s.default || s.first || s.even);
     resolved.push(raw ? { header: any(raw.header) ? raw.header : prev.header, footer: any(raw.footer) ? raw.footer : prev.footer, titlePage: raw.titlePage || (i > 0 && !raw && prev.titlePage), evenOdd: raw.evenOdd } : prev);
   });
-  if (sectPrs.some((sp, i) => i > 0 && attr(child(sp, "w:type"), "w:val") === "continuous")) warnings.add("Sauts de section « continu » : remplacés par des sauts de section avec page suivante.");
+  if (sectPrs.some((sp, i) => i > 0 && ["evenPage", "oddPage"].includes(attr(child(sp, "w:type"), "w:val") ?? ""))) warnings.add("Sauts de section « page paire » ou « page impaire » : remplacés par des sauts de section avec page suivante.");
+  if (sectPrs.some((sp) => { const c = child(sp, "w:cols"); return !!c && (c.getElementsByTagName("w:col").length > 0 && c.getAttribute("w:equalWidth") === "0"); })) warnings.add("Colonnes de largeurs inégales : ramenées à des colonnes égales.");
   // The break before section k carries the setup of section k.
   ctx.sectionNodes = infos.slice(1).map((info, k) => {
     const hf = resolved[k + 1];
     const linked = !hf || JSON.stringify(hf) === JSON.stringify(resolved[k]);
-    return { type: "sectionBreak", attrs: { page: info.page, hf: linked ? null : hf } };
+    const continuous = attr(child(sectPrs[k + 1], "w:type"), "w:val") === "continuous";
+    return { type: "sectionBreak", attrs: { page: info.page, hf: continuous || linked ? null : hf, ...(continuous ? { kind: "continuous" } : {}) } };
   });
   const blocks = convertBlocks(ctx, body);
   // Sections announced by the file but whose ending paragraph was not found (inside a table, say): they follow at the end.
   while (ctx.sectionNodes.length) blocks.push(ctx.sectionNodes.shift()!, paragraph([]));
 
   const page = infos[0].page;
-  resolvePlacements(blocks, infos[0].w, infos[0].margins);
+  // Shapes are placed against the paper and margins of the section they are in.
+  let seg: PM[] = [];
+  let si = 0;
+  for (const b of blocks) {
+    if (b.type === "sectionBreak") { resolvePlacements(seg, infos[Math.min(si, infos.length - 1)].w, infos[Math.min(si, infos.length - 1)].margins); seg = []; si++; }
+    else seg.push(b);
+  }
+  resolvePlacements(seg, infos[Math.min(si, infos.length - 1)].w, infos[Math.min(si, infos.length - 1)].margins);
 
   const headerFooter = resolved[0] && (resolved[0].header.default || resolved[0].header.first || resolved[0].header.even || resolved[0].footer.default || resolved[0].footer.first || resolved[0].footer.even) ? resolved[0] : undefined;
   const footnotes = await text("word/footnotes.xml");

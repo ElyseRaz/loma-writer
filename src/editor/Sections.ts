@@ -3,7 +3,7 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection, TextSelection, type EditorState } from "@tiptap/pm/state";
 import { sanitizeHeaderFooter, type HeaderFooterSettings } from "../pagination/headerFooter";
 import { sanitizePage } from "../services/documents/sanitize";
-import { DEFAULT_PAGE, type PageSetup } from "../state/types";
+import { DEFAULT_PAGE, type ColumnsSpec, type PageSetup } from "../state/types";
 
 /** A section of the document: its own paper, orientation, margins, headers and footers. */
 export interface SectionInfo {
@@ -16,10 +16,15 @@ export interface SectionInfo {
   hf: HeaderFooterSettings;
   /** True when the section takes its headers and footers from the previous one. */
   linked: boolean;
+  /** How the section starts: on a new page, or right after the previous one on the same page (it can only change the columns). */
+  kind: SectionKind;
 }
+
+export type SectionKind = "nextPage" | "continuous";
 
 export const SECTION_BREAK = "sectionBreak";
 export const SECTION_LABEL = "Saut de section (page suivante)";
+export const SECTION_LABELS: Record<SectionKind, string> = { nextPage: SECTION_LABEL, continuous: "Saut de section (continu)" };
 
 /**
  * The sections of a document. The first one is described by the document-level setup (`docPage`, `docHf`); every `sectionBreak`
@@ -29,23 +34,27 @@ export interface SectionBreakInfo {
   pos: number;
   page: unknown;
   hf: unknown;
+  kind?: unknown;
 }
 
 /** The raw section breaks of a document, in order (cheap to compare, so React can track them). */
 export function readSectionBreaks(doc: PMNode): SectionBreakInfo[] {
   const out: SectionBreakInfo[] = [];
-  doc.forEach((n, off) => { if (n.type.name === SECTION_BREAK) out.push({ pos: off, page: n.attrs.page, hf: n.attrs.hf }); });
+  doc.forEach((n, off) => { if (n.type.name === SECTION_BREAK) out.push({ pos: off, page: n.attrs.page, hf: n.attrs.hf, kind: n.attrs.kind }); });
   return out;
 }
 
 /** Resolves breaks into sections (inheritance of paper and of headers/footers). */
 export function buildSections(breaks: SectionBreakInfo[], docPage: PageSetup, docHf: HeaderFooterSettings): SectionInfo[] {
-  const out: SectionInfo[] = [{ index: 0, pos: -1, page: docPage, hf: docHf, linked: false }];
+  const out: SectionInfo[] = [{ index: 0, pos: -1, page: docPage, hf: docHf, linked: false, kind: "nextPage" }];
   for (const b of breaks) {
     const prev = out[out.length - 1];
-    const page = b.page ? sanitizePage(b.page as Partial<PageSetup>) : prev.page;
-    const linked = !b.hf;
-    out.push({ index: out.length, pos: b.pos, page, hf: linked ? prev.hf : sanitizeHeaderFooter(b.hf), linked });
+    const kind: SectionKind = b.kind === "continuous" ? "continuous" : "nextPage";
+    let page = b.page ? sanitizePage(b.page as Partial<PageSetup>) : prev.page;
+    // A section that continues on the same page keeps its paper and margins: only the columns can change.
+    if (kind === "continuous") { const { columns, ...rest } = prev.page; void columns; page = { ...rest, ...(page.columns ? { columns: page.columns } : {}) }; }
+    const linked = kind === "continuous" || !b.hf;
+    out.push({ index: out.length, pos: b.pos, page, hf: linked ? prev.hf : sanitizeHeaderFooter(b.hf), linked, kind });
   }
   return out;
 }
@@ -63,7 +72,7 @@ declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     sections: {
       /** Starts a new section (on a new page) at the cursor; it begins with the current paper, margins and headers. */
-      insertSectionBreak: () => ReturnType;
+      insertSectionBreak: (options?: { kind?: SectionKind; columns?: ColumnsSpec | null }) => ReturnType;
       /** Changes the paper/margins of the section `index` (the first one is stored with the document, not in a break). */
       setSectionPage: (index: number, page: PageSetup) => ReturnType;
       /** Gives section `index` its own headers and footers, or links it to the previous section again (null). */
@@ -87,6 +96,7 @@ export const SectionBreak = Node.create({
     return {
       page: { default: null, parseHTML: (el: HTMLElement) => json(el, "data-page"), renderHTML: (a: Record<string, unknown>) => (a.page ? { "data-page": JSON.stringify(a.page) } : {}) },
       hf: { default: null, parseHTML: (el: HTMLElement) => json(el, "data-hf"), renderHTML: (a: Record<string, unknown>) => (a.hf ? { "data-hf": JSON.stringify(a.hf) } : {}) },
+      kind: { default: "nextPage", parseHTML: (el: HTMLElement) => (el.getAttribute("data-kind") === "continuous" ? "continuous" : "nextPage"), renderHTML: (a: Record<string, unknown>) => (a.kind === "continuous" ? { "data-kind": "continuous" } : {}) },
     };
   },
 
@@ -94,28 +104,33 @@ export const SectionBreak = Node.create({
     return [{ tag: "div[data-section-break]" }];
   },
 
-  renderHTML({ HTMLAttributes }) {
-    return ["div", mergeAttributes(HTMLAttributes, { "data-section-break": "", class: "section-break", contenteditable: "false" }), ["span", {}, SECTION_LABEL]];
+  renderHTML({ HTMLAttributes, node }) {
+    return ["div", mergeAttributes(HTMLAttributes, { "data-section-break": "", class: "section-break", contenteditable: "false" }), ["span", {}, SECTION_LABELS[node.attrs.kind === "continuous" ? "continuous" : "nextPage"]]];
   },
 
   addCommands() {
     return {
       insertSectionBreak:
-        () =>
+        (options) =>
         ({ state, tr, dispatch, editor }) => {
+          const kind: SectionKind = options?.kind ?? "nextPage";
           const { $from } = state.selection;
           // Top-level position: after the block holding the cursor (the block is split first when the cursor is inside text).
           const index = $from.depth >= 1 ? $from.index(0) : 0;
           const top = state.doc.child(index);
           const sections = (editor.storage as unknown as { sectionBreak?: { current: () => SectionInfo[] } }).sectionBreak?.current();
           const cur = sections?.[sectionIndexAt(state.doc, $from.pos)];
-          const page = cur ? cur.page : DEFAULT_PAGE;
+          const base = cur ? cur.page : DEFAULT_PAGE;
+          // A new section starts with the current setup; "columns" (when given) sets its own.
+          const { columns: _c, ...rest } = base;
+          const columns = options && "columns" in options ? options.columns : base.columns;
+          const page: PageSetup = { ...rest, ...(columns ? { columns } : {}) };
           let at = $from.after(1);
           if (top.isTextblock && $from.depth === 1 && $from.parentOffset > 0 && $from.parentOffset < top.content.size) {
             tr.split($from.pos);
             at = tr.mapping.map($from.after(1));
           } else if (top.isTextblock && $from.depth === 1 && $from.parentOffset === 0 && top.content.size > 0) at = $from.before(1);
-          const node = state.schema.nodes[SECTION_BREAK].create({ page, hf: null });
+          const node = state.schema.nodes[SECTION_BREAK].create({ page, hf: null, kind });
           tr.insert(at, node);
           // A paragraph must follow the break, to type in the new section.
           const after = at + node.nodeSize;

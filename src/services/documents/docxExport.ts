@@ -9,7 +9,7 @@ import { resolveStyle, type StyleId } from "../../editor/docStyles";
 import { ALL_BULLET_IDS, ALL_NUMBER_IDS, BULLET_CHARS, levelType } from "./listFormats";
 import { cleanListType } from "../../editor/ListTypes";
 import {
-  AlignmentType, HeightRule, SectionType, HorizontalPositionRelativeFrom, TextWrappingSide, TextWrappingType, VerticalPositionRelativeFrom, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
+  AlignmentType, NumberFormat, HeightRule, SectionType, HorizontalPositionRelativeFrom, TextWrappingSide, TextWrappingType, VerticalPositionRelativeFrom, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
   PageBreak as DocxPageBreak, ShadingType, Table, TableCell, TableRow, TextRun, WidthType, type ParagraphChild,
 } from "docx";
 import { pageDimensions, type PageSetup } from "../../state/types";
@@ -123,6 +123,8 @@ function imageRun(ctx: Ctx, n: PM): ImageRun | null {
         : undefined;
   return new ImageRun({ type, data: data.bytes, transformation: { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)), ...(rotation ? { rotation } : {}) }, ...(floating ? { floating } : {}), altText: { name: "image", description: String(n.attrs?.alt ?? ""), title: "image" } });
 }
+
+const NUMBER_FORMATS = { decimal: NumberFormat.DECIMAL, upperRoman: NumberFormat.UPPER_ROMAN, lowerRoman: NumberFormat.LOWER_ROMAN, upperLetter: NumberFormat.UPPER_LETTER, lowerLetter: NumberFormat.LOWER_LETTER } as const;
 
 const cmTw = (cm: number) => Math.round(cm * 567);
 
@@ -339,13 +341,23 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
     return {
       size: { width: w * TWIPS_PER_PX, height: h * TWIPS_PER_PX, orientation: page.orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
       margin: { top: twips(m.top), bottom: twips(m.bottom), left: twips(m.left), right: twips(m.right), ...(gutter.cm && gutter.pos === "left" ? { gutter: twips(cmToPx(gutter.cm)) } : {}) },
+      // Page numbers of the section (`w:pgNumType`): format and restart.
+      ...(page.numberFormat || page.numberStart !== undefined ? { pageNumbers: { ...(page.numberStart !== undefined ? { start: page.numberStart } : {}), ...(page.numberFormat ? { formatType: NUMBER_FORMATS[page.numberFormat] } : {}) } } : {}),
     };
   };
   // Sections: the first one is the document's own setup, every section break starts the next one (with its paper, margins and, when
   // it has its own, headers and footers: a section without any takes the previous ones, as in Word).
-  const segments: Array<{ page: PageSetup; hf: HeaderFooterSettings | null; nodes: PM[] }> = [{ page: model.page, hf: model.headerFooter ?? null, nodes: [] }];
+  const segments: Array<{ page: PageSetup; hf: HeaderFooterSettings | null; nodes: PM[]; continuous: boolean }> = [{ page: model.page, hf: model.headerFooter ?? null, nodes: [], continuous: false }];
   for (const n of model.content.content ?? []) {
-    if (n.type === SECTION_BREAK) segments.push({ page: sanitizePage(n.attrs?.page as Partial<PageSetup>), hf: n.attrs?.hf ? sanitizeHeaderFooter(n.attrs.hf) : null, nodes: [] });
+    if (n.type === SECTION_BREAK) {
+      const continuous = n.attrs?.kind === "continuous";
+      const own = sanitizePage(n.attrs?.page as Partial<PageSetup>);
+      const prev = segments[segments.length - 1];
+      // A continuous section stays on the page of the previous one: same paper and margins, only the columns are its own.
+      let page = own;
+      if (continuous) { const { columns, ...rest } = prev.page; void columns; page = { ...rest, ...(own.columns ? { columns: own.columns } : {}) }; }
+      segments.push({ page, hf: continuous || !n.attrs?.hf ? null : sanitizeHeaderFooter(n.attrs.hf), nodes: [], continuous });
+    }
     else segments[segments.length - 1].nodes.push(n);
   }
 
@@ -384,7 +396,8 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
         ...(hf && hasContent(hf.header) ? { headers: wrappers(hf.header, (c) => new Header({ children: hfChildren(ctx, c) }), hf.titlePage, hf.evenOdd) } : {}),
         ...(hf && hasContent(hf.footer) ? { footers: wrappers(hf.footer, (c) => new Footer({ children: hfChildren(ctx, c) }), hf.titlePage, hf.evenOdd) } : {}),
         properties: {
-          type: SectionType.NEXT_PAGE,
+          type: seg.continuous ? SectionType.CONTINUOUS : SectionType.NEXT_PAGE,
+          ...(seg.page.columns ? { column: { count: seg.page.columns.count, space: twips(cmToPx(seg.page.columns.gapCm)), equalWidth: true, separate: seg.page.columns.line } } : {}),
           ...(hf?.titlePage ? { titlePage: true } : {}),
           page: pageProps(seg.page),
         },

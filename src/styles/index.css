@@ -146,7 +146,7 @@ select {
 .page-field { background: #dbeafe; color: #1d4ed8; border-radius: 3px; padding: 0 4px; font-size: 0.85em; }
 .hf-body .page-field { background: none; color: inherit; padding: 0; font-size: inherit; }
 /* Page-break spacers inserted by the pagination engine. */
-.paper .ProseMirror .pg-spacer { height: calc(var(--h, 0) * 1px - var(--pg-print-sub, 0px)); margin: 0; padding: 0; border: 0; pointer-events: none; user-select: none; }
+.paper .ProseMirror .pg-spacer { height: calc(var(--h, 0) * 1px - var(--k, 1) * var(--pg-print-sub, 0px)); margin: 0; padding: 0; border: 0; pointer-events: none; user-select: none; }
 .paper .ProseMirror .pg-block, .paper .ProseMirror .pg-inline { display: block; }
 .paper .ProseMirror .pg-spacer.pg-header { height: auto; pointer-events: none; user-select: none; }
 .paper .ProseMirror .pg-row { display: table-row; height: auto; }
@@ -393,3 +393,12 @@ select {
 .paper .ProseMirror .section-break.ProseMirror-selectednode { color: #2563eb; }
 .paper .ProseMirror .section-break.ProseMirror-selectednode::before, .paper .ProseMirror .section-break.ProseMirror-selectednode::after { border-top-color: #2563eb; }
 @media print { .section-break { display: none !important; } }
+
+/* Columns: the blocks of a multi-column section sit at their column slot, out of the flow (a spacer holds their place). While the
+   layout is measured (.pg-measuring) they are ordinary blocks one column wide. */
+.paper .ProseMirror { position: relative; }
+.paper .ProseMirror:not(.pg-measuring) > [data-col] { position: absolute; left: var(--col-x); top: var(--col-y); width: var(--col-w); margin-top: 0 !important; margin-bottom: 0 !important; --sec-l: 0px !important; --sec-r: 0px !important; box-sizing: border-box; }
+/* A paragraph that runs over several columns of a page is a small multi-column box, starting a few px down its first column. */
+.paper .ProseMirror:not(.pg-measuring) > [data-col-split] { column-count: var(--col-m); column-gap: var(--col-gap); column-fill: auto; height: var(--col-h); }
+.paper .ProseMirror:not(.pg-measuring) > [data-col-split]::before { content: ""; display: block; height: var(--col-off); }
+.page-column-rule { position: absolute; width: 0; border-left: 1px solid #9ca3af; pointer-events: none; }

@@ -1,4 +1,5 @@
-import { marginsPx, pageDimensions, type PageSetup } from "../state/types";
+import { cmToPx, marginsPx, pageDimensions } from "../state/page";
+import type { PageSetup } from "../state/types";
 
 /** Logical gap between two pages on screen (CSS px). It is removed when printing. */
 export const PAGE_GAP = 24;
@@ -20,6 +21,8 @@ export interface PageGeometry {
   contentHeight: number;
   /** Distance between the tops of two consecutive pages. */
   pitch: number;
+  /** Equal-width text columns (px), when the section has more than one. */
+  columns?: { count: number; gap: number; line: boolean };
 }
 
 export function pageGeometry(page: PageSetup, header = 0, footer = 0, gap = PAGE_GAP): PageGeometry {
@@ -28,7 +31,8 @@ export function pageGeometry(page: PageSetup, header = 0, footer = 0, gap = PAGE
   const insetTop = Math.max(m.top, header);
   const insetBottom = Math.max(m.bottom, footer);
   const contentHeight = Math.max(48, h - insetTop - insetBottom);
-  return { width: w, height: h, insetTop, insetBottom, insetLeft: m.left, insetRight: m.right, gap, contentHeight, pitch: h + gap };
+  const c = page.columns && page.columns.count >= 2 ? { count: page.columns.count, gap: cmToPx(page.columns.gapCm), line: page.columns.line } : undefined;
+  return { width: w, height: h, insetTop, insetBottom, insetLeft: m.left, insetRight: m.right, gap, contentHeight, pitch: h + gap, ...(c ? { columns: c } : {}) };
 }
 
 /** One unit the engine lays out: a text block, a table row, a rule or a manual page break. */
@@ -54,6 +58,8 @@ export interface Atom {
   repeat?: number;
   /** Section breaks: index of the section that starts after this atom. */
   section?: number;
+  /** Section breaks: the next section continues on the same page (it can only change the columns). */
+  continuous?: boolean;
   /** Text only: measures the line boxes (natural coordinates). Called lazily, only for atoms crossing a page end. */
   lines?: () => LineBox[];
 }
@@ -67,6 +73,31 @@ export interface PageBreak {
   spacer: number;
   /** Part of `spacer` taken by repeated table header rows (the rest is the gap). */
   repeat?: number;
+  /** What this break really adds to the layout below it, when that differs from the height of the spacer (columns). */
+  net?: number;
+  /** A column region: the spacer stands in for the blocks of the region, which are drawn out of the flow. */
+  region?: { margin: number; pages: number };
+}
+
+/** Where a block of a column region goes (engine coordinates; `x` is from the left of the text area). */
+export interface Placement {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  /** The block is split over `columns` columns of the page: drawn as a small multi-column box starting `offset` px down the first one. */
+  split?: { columns: number; gap: number; offset: number; height: number };
+}
+
+/** A vertical rule between the columns of one page. */
+export interface Band {
+  page: number;
+  top: number;
+  height: number;
+  count: number;
+  gap: number;
+  width: number;
+  left: number;
 }
 
 /** One page sheet, in engine coordinates (0 = top of the text area of page 0). */
@@ -93,4 +124,8 @@ export interface PaginationResult {
   /** Atoms taller than a whole page: they overflow instead of being cut. */
   oversize: number[];
   sheets: Sheet[];
+  /** One entry per atom: its column slot when it belongs to a multi-column section, else null. */
+  placements: Array<Placement | null>;
+  /** Rules between columns, per page. */
+  bands: Band[];
 }

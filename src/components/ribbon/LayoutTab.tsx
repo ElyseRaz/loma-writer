@@ -1,6 +1,6 @@
-import { Columns2, FileDown, Ruler, RectangleHorizontal, RectangleVertical, Rows3, ScissorsLineDashed, Square, StretchHorizontal } from "lucide-react";
+import { Hash, Columns2, FileDown, Ruler, RectangleHorizontal, RectangleVertical, Rows3, ScissorsLineDashed, Square, StretchHorizontal } from "lucide-react";
 import { type Orientation, type PageSetup, type PageSize } from "../../state/types";
-import { MARGIN_PRESETS, PAPER_SIZES, baseMarginsCm, fitMargins, formatCm, formatSize, isMirrored } from "../../state/page";
+import { DEFAULT_COLUMN_GAP_CM, MARGIN_PRESETS, PAPER_SIZES, baseMarginsCm, fitMargins, formatCm, formatSize, isMirrored } from "../../state/page";
 import { useApp } from "../../state/store";
 import { useSections } from "../../editor/useSections";
 import { useLomaEditor } from "../../editor/EditorProvider";
@@ -27,6 +27,7 @@ export function LayoutTab() {
   const snap = useEditorSnapshot(editor);
   const { sections, current, section } = useSections(editor, state.page, state.headerFooter);
   const page = section.page; // the paper and margins of the section holding the caret
+  const continuous = section.kind === "continuous";
   // A new paper or orientation keeps the margins whenever the text area stays usable; otherwise they shrink to fit.
   // Changes apply to the section holding the caret (the first section is stored with the document, the others in their break).
   const writePage = (next: PageSetup) => {
@@ -39,6 +40,11 @@ export function LayoutTab() {
     writePage(fitMargins({ ...rest, margins: m }));
   };
   const activePaper = page.size;
+  /** Columns of the section holding the caret (the gap and the rule are kept from its previous setting). */
+  const setColumns = (n: number) => {
+    const { columns, ...rest } = page;
+    writePage(n < 2 ? rest : { ...rest, columns: { count: n, gapCm: columns?.gapCm ?? DEFAULT_COLUMN_GAP_CM, line: columns?.line ?? false } });
+  };
   const setWatermark = (w: Watermark | null) => set((s) => ({ watermark: w, doc: { ...s.doc, dirty: true } }));
   const layout = (patch: Partial<ParagraphLayout>) => { editor?.chain().focus().setParagraphLayout(patch).run(); set((s) => ({ doc: { ...s.doc, dirty: true } })); };
 
@@ -48,6 +54,8 @@ export function LayoutTab() {
         <DropdownButton
           icon={Ruler}
           size="lg"
+          disabled={continuous}
+          title={continuous ? "Une section continue garde le papier et les marges de la section précédente" : undefined}
           label="Marges"
           items={[
             ...MARGIN_PRESETS.map((m) => ({ label: m.label, shortcut: marginSummary(m.cm, m.id === "mirrored"), checked: page.margins === m.id, onSelect: () => setPreset(m.id) })),
@@ -56,9 +64,12 @@ export function LayoutTab() {
             { label: "Marge de reliure…", checked: !!page.gutterCm, onSelect: () => set({ dialog: "margins" }) },
           ]}
         />
+        <RibbonButton icon={Hash} size="lg" label="N° de page" title="Format des numéros de page (chiffres romains, lettres) et redémarrage de la numérotation dans cette section" onClick={() => set({ dialog: "pageNumber" })} />
         <DropdownButton
           icon={page.orientation === "portrait" ? RectangleVertical : RectangleHorizontal}
           size="lg"
+          disabled={continuous}
+          title={continuous ? "Une section continue garde le papier et les marges de la section précédente" : undefined}
           label="Orientation"
           items={(["portrait", "landscape"] as Orientation[]).map((o) => ({
             label: o === "portrait" ? "Portrait" : "Paysage",
@@ -70,6 +81,8 @@ export function LayoutTab() {
         <DropdownButton
           icon={Square}
           size="lg"
+          disabled={continuous}
+          title={continuous ? "Une section continue garde le papier et les marges de la section précédente" : undefined}
           label="Taille"
           items={[
             ...PAPER_SIZES.map((p) => ({ label: p.label, shortcut: formatSize(p.width, p.height), checked: activePaper === p.id, onSelect: () => update({ size: p.id as PageSize, customSizeCm: undefined }) })),
@@ -77,7 +90,16 @@ export function LayoutTab() {
             { label: "Autres formats de papier…", checked: activePaper === "Custom", shortcut: activePaper === "Custom" && page.customSizeCm ? formatSize(page.customSizeCm.width, page.customSizeCm.height) : undefined, onSelect: () => set({ dialog: "paper" }) },
           ]}
         />
-        <RibbonButton icon={Columns2} size="lg" label="Colonnes" disabled title="Colonnes : non prises en charge — la pagination travaille sur une seule colonne (utilisez un tableau sans bordure pour une mise en page en colonnes)" />
+        <DropdownButton
+          icon={Columns2}
+          size="lg"
+          label="Colonnes"
+          items={[
+            ...[1, 2, 3].map((n) => ({ label: n === 1 ? "Une" : n === 2 ? "Deux" : "Trois", checked: (page.columns?.count ?? 1) === n, onSelect: () => setColumns(n) })),
+            { separator: true as const },
+            { label: "Autres colonnes…", checked: (page.columns?.count ?? 1) > 3, onSelect: () => set({ dialog: "columns" }) },
+          ]}
+        />
         <DropdownButton
           icon={ScissorsLineDashed}
           size="lg"
@@ -85,6 +107,7 @@ export function LayoutTab() {
           items={[
             { label: "Saut de page", shortcut: "Ctrl+Entrée", onSelect: () => editor?.chain().focus().insertPageBreak().run() },
             { label: "Saut de section (page suivante)", onSelect: () => editor?.chain().focus().insertSectionBreak().run() },
+            { label: "Saut de section (continu)", onSelect: () => editor?.chain().focus().insertSectionBreak({ kind: "continuous" }).run() },
             { separator: true as const },
             { label: "Saut de page avant ce paragraphe", checked: snap.layout.pageBreakBefore, onSelect: () => editor?.chain().focus().setParagraphLayout({ pageBreakBefore: !snap.layout.pageBreakBefore }).run() },
             { label: "Garder avec le paragraphe suivant", checked: snap.layout.keepWithNext, onSelect: () => editor?.chain().focus().setParagraphLayout({ keepWithNext: !snap.layout.keepWithNext }).run() },

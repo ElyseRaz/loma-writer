@@ -4,7 +4,7 @@
 
     npm run dev            # dans un terminal
     npm run test:e2e       # dans un autre (Chrome requis, CHROME_PATH pour un autre chemin)
-                           # = pagination.mjs + home.mjs (onglet Accueil) + insert.mjs (onglet Insertion) + typography.mjs (polices, tailles, couleurs, puces, styles, tableaux) + page.mjs (papier, marges, orientation) + layout.mjs (retraits, espacement, sauts, filigrane) + sections.mjs (sections : papier, marges, en-têtes par section)
+                           # = pagination.mjs + home.mjs (onglet Accueil) + insert.mjs (onglet Insertion) + typography.mjs (polices, tailles, couleurs, puces, styles, tableaux) + page.mjs (papier, marges, orientation) + layout.mjs (retraits, espacement, sauts, filigrane) + sections.mjs (sections : papier, marges, en-têtes par section) + columns.mjs (colonnes, saut continu)
 
 `audit.js` est exécuté dans la page : il mesure le rendu réel et liste les violations (caractère hors de la zone de
 texte d'une page, ligne de tableau ou image coupée, titre séparé de ce qui le suit).

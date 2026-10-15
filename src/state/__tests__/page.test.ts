@@ -195,15 +195,100 @@ describe("sections", () => {
     expect(JSON.stringify(b[1].attrs?.hf)).toContain("Section 3");
     expect(JSON.stringify(back.headerFooter)).toContain("Section 1");
   });
+  const cols2 = { count: 2, gapCm: 1.5, line: true };
+  const continuousModel = (): DocumentModel => ({
+    content: { type: "doc", content: [P("Un"), { type: "sectionBreak", attrs: { page: { ...DEFAULT_PAGE, columns: cols2 }, hf: null, kind: "continuous" } }, P("Deux"), P("Trois"), { type: "sectionBreak", attrs: { page: DEFAULT_PAGE, hf: null, kind: "continuous" } }, P("Quatre")] },
+    page: DEFAULT_PAGE,
+  });
+  const shapeOf = (j: { content?: Array<{ type?: string; attrs?: Record<string, unknown> }> }) => (j.content ?? []).map((n) => (n.type === "sectionBreak" ? `break:${n.attrs?.kind ?? "nextPage"}:${(n.attrs?.page as { columns?: { count: number } }).columns?.count ?? 1}` : n.type));
+  const want = ["paragraph", "break:continuous:2", "paragraph", "paragraph", "break:continuous:1", "paragraph"];
+  it("DOCX keeps continuous breaks and columns", async () => {
+    const zip = await JSZip.loadAsync((await exportDocx(continuousModel())).bytes);
+    const xml = await zip.file("word/document.xml")!.async("string");
+    expect(xml).toContain('<w:type w:val="continuous"');
+    expect(xml).toMatch(/<w:cols [^>]*w:num="2"/);
+    const { model: back, warnings } = await importDocx(await zip.generateAsync({ type: "uint8array" }));
+    expect(shapeOf(back.content as never)).toEqual(want);
+    expect(breaks(back.content as never)[0].attrs?.page).toMatchObject({ columns: { count: 2, line: true } });
+    expect((breaks(back.content as never)[0].attrs?.page as { columns: { gapCm: number } }).columns.gapCm).toBeCloseTo(1.5, 1);
+    expect(warnings.join(" ")).not.toContain("continu");
+  });
+  it("ODT keeps continuous breaks and columns (a text:section)", async () => {
+    const zip = await JSZip.loadAsync((await exportOdt(continuousModel())).bytes);
+    const xml = await zip.file("content.xml")!.async("string");
+    expect(xml).toContain("<text:section");
+    expect(xml).toContain('fo:column-count="2"');
+    const { model: back } = await importOdt(await zip.generateAsync({ type: "uint8array" }));
+    expect(shapeOf(back.content as never)).toEqual(want);
+    expect(breaks(back.content as never)[0].attrs?.page).toMatchObject({ columns: { count: 2, line: true } });
+  });
+  it("a next-page section with columns keeps both in ODT and DOCX", async () => {
+    const m: DocumentModel = { content: { type: "doc", content: [P("a"), { type: "sectionBreak", attrs: { page: { ...DEFAULT_PAGE, columns: { count: 3, gapCm: 1, line: false } }, hf: null } }, P("b")] }, page: DEFAULT_PAGE };
+    for (const back of [(await importOdt((await exportOdt(m)).bytes)).model, (await importDocx((await exportDocx(m)).bytes)).model]) {
+      expect(shapeOf(back.content as never)).toEqual(["paragraph", "break:nextPage:3", "paragraph"]);
+    }
+  });
   it("a section that starts with a table or an image still gets its page (an empty paragraph carries the master page)", async () => {
     const m: DocumentModel = { content: { type: "doc", content: [P("a"), { type: "sectionBreak", attrs: { page: land, hf: null } }, { type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [P("c")] }] }] }, P("fin")] }, page: DEFAULT_PAGE };
     const { model: back } = await importOdt((await exportOdt(m)).bytes);
     expect(kinds(back.content as never)).toEqual(["paragraph", "sectionBreak", "table", "paragraph"]);
+  });
+  it("shapes of a later section are placed against that section's margins, not the first one's", async () => {
+    const shape = { type: "shape", attrs: { kind: "rect", width: 100, height: 60, fill: "#ffffff", stroke: "#000000", strokeWidth: 1, wrap: "front", anchor: "page", x: 100, y: 50, z: 0, align: "left" }, content: [{ type: "paragraph" }] };
+    const m: DocumentModel = { content: { type: "doc", content: [P("a"), { type: "sectionBreak", attrs: { page: { size: "A4", orientation: "landscape", margins: "narrow" }, hf: null } }, shape, P("b")] }, page: DEFAULT_PAGE };
+    const zip = await JSZip.loadAsync((await exportDocx(m)).bytes);
+    const xml = (await zip.file("word/document.xml")!.async("string")).replace(/(<wp:positionH relativeFrom=")page(")/, "$1margin$2");
+    zip.file("word/document.xml", xml);
+    const { model } = await importDocx(await zip.generateAsync({ type: "uint8array" }));
+    const got = (model.content.content ?? []).find((n) => n.type === "shape");
+    // narrow margins of the landscape section: 1.27 cm = 48 px (the first section has 96 px)
+    expect(got?.attrs?.x).toBe(100 + 48);
   });
   it("a document with a single section is unchanged", async () => {
     const one: DocumentModel = { content: { type: "doc", content: [P("x")] }, page: land };
     const { model: back } = await importDocx((await exportDocx(one)).bytes);
     expect(back.page.orientation).toBe("landscape");
     expect(kinds(back.content as never)).toEqual(["paragraph"]);
+  });
+});
+
+describe("page numbers", () => {
+  const P = (text: string) => ({ type: "paragraph", content: [{ type: "text", text }] });
+  const model = (): DocumentModel => ({
+    content: { type: "doc", content: [P("Un"), { type: "sectionBreak", attrs: { page: { ...DEFAULT_PAGE, numberFormat: "lowerRoman", numberStart: 1 }, hf: null } }, P("Deux"), { type: "sectionBreak", attrs: { page: { ...DEFAULT_PAGE, numberFormat: "upperLetter", numberStart: 7 }, hf: null } }, P("Trois")] },
+    page: { ...DEFAULT_PAGE, numberFormat: "upperRoman", numberStart: 4 },
+  });
+  const nums = (j: { content?: Array<{ type?: string; attrs?: Record<string, unknown> }> }, first: PageSetup) => [first, ...(j.content ?? []).filter((n) => n.type === "sectionBreak").map((n) => n.attrs?.page as PageSetup)].map((p) => `${p.numberFormat ?? "decimal"}@${p.numberStart ?? "-"}`);
+  const want = ["upperRoman@4", "lowerRoman@1", "upperLetter@7"];
+
+  it("formats numbers like Word", async () => {
+    const { formatPageNumber, displayedNumbers } = await import("../../pagination/pageNumber");
+    expect([1, 4, 9, 14, 40, 1994].map((n) => formatPageNumber(n, "upperRoman"))).toEqual(["I", "IV", "IX", "XIV", "XL", "MCMXCIV"]);
+    expect([3, 12].map((n) => formatPageNumber(n, "lowerRoman"))).toEqual(["iii", "xii"]);
+    expect([1, 26, 27, 28, 53].map((n) => formatPageNumber(n, "lowerLetter"))).toEqual(["a", "z", "aa", "bb", "aaa"]);
+    expect(formatPageNumber(0, "upperRoman")).toBe("0");
+    // sections: 2 pages, then a section restarting at 10 (2 pages), then one that goes on
+    const sheets = [{ section: 0, indexInSection: 0 }, { section: 0, indexInSection: 1 }, { section: 1, indexInSection: 0 }, { section: 1, indexInSection: 1 }, { section: 2, indexInSection: 0 }];
+    expect(displayedNumbers(sheets, [undefined, 10, undefined])).toEqual([1, 2, 10, 11, 12]);
+    expect(displayedNumbers(sheets, [5, undefined, undefined])).toEqual([5, 6, 7, 8, 9]);
+  });
+  it("DOCX keeps format and restart of every section (w:pgNumType)", async () => {
+    const zip = await JSZip.loadAsync((await exportDocx(model())).bytes);
+    const xml = await zip.file("word/document.xml")!.async("string");
+    expect(xml).toContain('w:fmt="upperRoman"');
+    expect(xml).toMatch(/<w:pgNumType[^>]*w:start="7"/);
+    const { model: back } = await importDocx(await zip.generateAsync({ type: "uint8array" }));
+    expect(nums(back.content as never, back.page)).toEqual(want);
+  });
+  it("ODT keeps them too (style:num-format, style:page-number)", async () => {
+    const zip = await JSZip.loadAsync((await exportOdt(model())).bytes);
+    expect(await zip.file("styles.xml")!.async("string")).toContain('style:num-format="I"');
+    expect(await zip.file("content.xml")!.async("string")).toContain('style:page-number="7"');
+    const { model: back } = await importOdt(await zip.generateAsync({ type: "uint8array" }));
+    expect(nums(back.content as never, back.page)).toEqual(want);
+  });
+  it("rejects invalid numbering from a file", () => {
+    expect(sanitizePage({ numberFormat: "nope" as never, numberStart: -3 })).toEqual({ size: "A4", orientation: "portrait", margins: "normal" });
+    expect(sanitizePage({ numberFormat: "lowerRoman", numberStart: 12 })).toMatchObject({ numberFormat: "lowerRoman", numberStart: 12 });
   });
 });

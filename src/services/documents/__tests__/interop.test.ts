@@ -65,6 +65,19 @@ describe.skipIf(!hasLibreOffice)("interoperability with LibreOffice (independent
       const { model } = await importDocx(docx);
       expect(shape(model as never)).toEqual(want);
     });
+    const cont = () => ({
+      content: { type: "doc", content: [P("Un"), { type: "sectionBreak", attrs: { page: { size: "A4", orientation: "portrait", margins: "normal", columns: { count: 2, gapCm: 1.25, line: false } }, hf: null, kind: "continuous" } }, P("Deux"), { type: "sectionBreak", attrs: { page: { size: "A4", orientation: "portrait", margins: "normal" }, hf: null, kind: "continuous" } }, P("Trois")] },
+      page: { size: "A4", orientation: "portrait", margins: "normal" },
+    }) as never;
+    const colsOf = (m: { content: { content?: Array<{ type?: string; attrs?: Record<string, unknown> }> } }) => (m.content.content ?? []).filter((n) => n.type === "sectionBreak").map((n) => `${n.attrs?.kind ?? "nextPage"}:${(n.attrs?.page as { columns?: { count: number } }).columns?.count ?? 1}`);
+    it("our DOCX -> LibreOffice -> ODT -> our importer keeps continuous breaks and columns", async () => {
+      const { model } = await importOdt(libreOffice((await exportDocx(cont())).bytes, "docx", "odt"));
+      expect(colsOf(model as never)).toEqual(["continuous:2", "continuous:1"]);
+    });
+    it("our ODT -> LibreOffice -> DOCX -> our importer keeps continuous breaks and columns", async () => {
+      const { model } = await importDocx(libreOffice((await exportOdt(cont())).bytes, "odt", "docx"));
+      expect(colsOf(model as never)).toEqual(["continuous:2", "continuous:1"]);
+    });
   });
 
   it("our ODT -> LibreOffice -> DOCX -> our importer keeps the document skeleton", async () => {
