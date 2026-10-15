@@ -106,6 +106,7 @@ export function LayoutTab() {
           label="Sauts"
           items={[
             { label: "Saut de page", shortcut: "Ctrl+Entrée", onSelect: () => editor?.chain().focus().insertPageBreak().run() },
+            { label: "Saut de colonne", shortcut: "Ctrl+Maj+Entrée", onSelect: () => editor?.chain().focus().insertColumnBreak().run() },
             { label: "Saut de section (page suivante)", onSelect: () => editor?.chain().focus().insertSectionBreak().run() },
             { label: "Saut de section (continu)", onSelect: () => editor?.chain().focus().insertSectionBreak({ kind: "continuous" }).run() },
             { separator: true as const },

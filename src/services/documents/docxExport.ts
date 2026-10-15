@@ -10,7 +10,7 @@ import { ALL_BULLET_IDS, ALL_NUMBER_IDS, BULLET_CHARS, levelType } from "./listF
 import { cleanListType } from "../../editor/ListTypes";
 import {
   AlignmentType, NumberFormat, HeightRule, SectionType, HorizontalPositionRelativeFrom, TextWrappingSide, TextWrappingType, VerticalPositionRelativeFrom, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
-  PageBreak as DocxPageBreak, ShadingType, Table, TableCell, TableRow, TextRun, WidthType, type ParagraphChild,
+  PageBreak as DocxPageBreak, ColumnBreak as DocxColumnBreak, ShadingType, Table, TableCell, TableRow, TextRun, WidthType, type ParagraphChild,
 } from "docx";
 import { pageDimensions, type PageSetup } from "../../state/types";
 import { baseMarginsCm, cmToPx, gutterOf, isMirrored } from "../../state/page";
@@ -203,6 +203,7 @@ function blocks(ctx: Ctx, nodes: PM[] = [], list: ListCtx = null): Block[] {
       }
       case "image": out.push(new Paragraph({ children: inline(ctx, [n]) })); break;
       case "pageBreak": out.push(new Paragraph({ children: [new DocxPageBreak()] })); break;
+      case "columnBreak": out.push(new Paragraph({ children: [new DocxColumnBreak()] })); break;
     }
   }
   flushAnchored();

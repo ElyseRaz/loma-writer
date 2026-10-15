@@ -397,8 +397,11 @@ select {
 /* Columns: the blocks of a multi-column section sit at their column slot, out of the flow (a spacer holds their place). While the
    layout is measured (.pg-measuring) they are ordinary blocks one column wide. */
 .paper .ProseMirror { position: relative; }
-.paper .ProseMirror:not(.pg-measuring) > [data-col] { position: absolute; left: var(--col-x); top: var(--col-y); width: var(--col-w); margin-top: 0 !important; margin-bottom: 0 !important; --sec-l: 0px !important; --sec-r: 0px !important; box-sizing: border-box; }
+.paper .ProseMirror:not(.pg-measuring) [data-col] { position: absolute; left: var(--col-x); top: var(--col-y); width: var(--col-w); margin-top: 0 !important; margin-bottom: 0 !important; --sec-l: 0px !important; --sec-r: 0px !important; box-sizing: border-box; }
 /* A paragraph that runs over several columns of a page is a small multi-column box, starting a few px down its first column. */
-.paper .ProseMirror:not(.pg-measuring) > [data-col-split] { column-count: var(--col-m); column-gap: var(--col-gap); column-fill: auto; height: var(--col-h); }
-.paper .ProseMirror:not(.pg-measuring) > [data-col-split]::before { content: ""; display: block; height: var(--col-off); }
+.paper .ProseMirror:not(.pg-measuring) [data-col-split] { column-count: var(--col-m); column-gap: var(--col-gap); column-fill: auto; height: var(--col-h); }
+.paper .ProseMirror:not(.pg-measuring) [data-col-split]::before { content: ""; display: block; height: var(--col-off); }
+/* Lists and quotes of a column section: their items / paragraphs are placed one by one, the container only passes them through. */
+.paper .ProseMirror:not(.pg-measuring) [data-col-box] { display: contents; }
+.paper .ProseMirror:not(.pg-measuring) [data-col-quote] { border-left: 3px solid #2563eb; padding: 0 1em; background: #f6f8fd; font-style: italic; color: #3f4a63; }
 .page-column-rule { position: absolute; width: 0; border-left: 1px solid #9ca3af; pointer-events: none; }

@@ -132,10 +132,17 @@ propre papier, orientation, marges, en-têtes et pieds de page.
   section du curseur ; pour des colonnes sur une partie de la page, insérer un saut continu avant et après.
 - **Moteur** : les blocs d'une section à colonnes sont mesurés à la largeur d'une colonne, puis placés en position absolue
   (variables CSS `--col-x/y/w`) ; un espaceur occupe leur place dans le flux. Remplissage colonne après colonne, page après page ;
-  un paragraphe peut se couper entre deux colonnes d'une même page (boîte CSS multi-colonnes), jamais entre deux pages. Avant un saut
-  continu, les colonnes de la dernière page sont **équilibrées** (recherche dichotomique de la hauteur minimale).
+  un paragraphe peut se couper entre deux colonnes d'une même page (boîte CSS multi-colonnes). Les **listes** sont découpées par
+  élément et les **citations** par paragraphe (le conteneur passe en `display: contents`, chaque élément est placé seul : la
+  numérotation continue d'une colonne à l'autre, la puce garde son retrait, le trait de citation est reporté sur chaque paragraphe).
+  Avant un saut continu, les colonnes de la dernière page sont **équilibrées** (recherche dichotomique de la hauteur minimale).
+- **Saut de colonne** (Mise en page > Sauts, Ctrl+Maj+Entrée) : nœud `columnBreak` ; le texte suivant passe à la colonne suivante
+  (page suivante après la dernière colonne). Hors section à colonnes il agit comme un saut de page. DOCX `w:br w:type="column"`, ODT
+  `fo:break-after="column"`.
 - **Fichiers** : DOCX `w:type continuous` + `w:cols` ; ODT `text:section` + `style:columns` ; vérifié avec LibreOffice dans les deux sens.
   Colonnes de largeurs inégales : ramenées à des colonnes égales (avertissement).
-- **Limites** : listes, tableaux, citations et images plus hauts qu'une colonne débordent au lieu d'être coupés ; pas de saut de colonne ;
-  un paragraphe ne se coupe pas d'une page à l'autre dans une section à colonnes ; la dernière section à colonnes d'un document se
-  remplit colonne par colonne sans équilibrage (comme Word) ; impression des colonnes vérifiée seulement en PDF Chrome (pas dans Word).
+- **Limites** : un paragraphe ne se coupe pas d'une page à l'autre dans une section à colonnes (s'il ne tient pas dans le reste de
+  la page, il passe en entier sur la page suivante) ; un élément de liste, un tableau ou une image plus hauts qu'une colonne
+  débordent (les tableaux ne se coupent pas entre colonnes ; un tableau qui ne tient pas dans le reste d'une colonne passe à la
+  suivante) ; la dernière section à colonnes d'un document se remplit colonne par colonne sans équilibrage (comme Word) ;
+  l'impression avec colonnes est vérifiée en PDF Chrome (sections de tailles différentes), pas dans WebKitGTK ni Word.

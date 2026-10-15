@@ -468,6 +468,7 @@ function convertRuns(ctx: Ctx, parent: Element, base: RunProps, out: PM[], fs: F
             case "w:br":
             case "w:cr":
               if (c.getAttribute("w:type") === "page") out.push({ type: "pageBreak" });
+              else if (c.getAttribute("w:type") === "column") out.push({ type: "columnBreak" });
               else out.push({ type: "hardBreak" });
               break;
             case "w:drawing": { const node2 = shapeFromDrawing(ctx, c) ?? imageFromDrawing(ctx, c); if (node2) out.push(node2); break; }
@@ -597,7 +598,7 @@ function convertParagraph(ctx: Ctx, p: Element): ParaInfo {
     current = [];
   };
   for (const n of content) {
-    if (n.type === "pageBreak") { flush(); nodes.push(n); }
+    if (n.type === "pageBreak" || n.type === "columnBreak") { flush(); nodes.push(n); }
     else if ((n.type === "shape" || n.type === "shapeGroup") && n.attrs?.wrap !== "inline") floating.push({ ...n, attrs: { ...n.attrs, align: "left" } });
     else if (n.type === "shape" || n.type === "shapeGroup") { flush(); nodes.push({ ...n, attrs: { ...n.attrs, align: n.attrs?.wrap === "inline" && (align === "center" || align === "right") ? align : "left" } }); }
     else current.push(n);
@@ -676,7 +677,7 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
     {
       {
         const { nodes, kind, list } = convertParagraph(ctx, el);
-        if (nodes.length !== 1 || nodes[0].type === "pageBreak") { flush(); lists.close(); out.push(...nodes); return; }
+        if (nodes.length !== 1 || nodes[0].type === "pageBreak" || nodes[0].type === "columnBreak") { flush(); lists.close(); out.push(...nodes); return; }
         const node = nodes[0];
         if (list) { flush(); lists.add(list.type, list.level, [node], list.listType); return; }
         lists.close();

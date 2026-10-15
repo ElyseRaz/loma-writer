@@ -323,6 +323,7 @@ function blocks(ctx: Ctx, nodes: PM[] = [], listStyle?: string): string {
       case "table": out += table(ctx, n); break;
       case "shape": case "shapeGroup": out += shapeOdt(ctx, n); break;
       case "pageBreak": out += `<text:p text:style-name="PgBreak"/>`; break;
+      case "columnBreak": out += `<text:p text:style-name="ColBreak"/>`; break;
       case "image": out += `<text:p text:style-name="${ctx.paraStyle("Standard")}">${image(ctx, n)}</text:p>`; break;
     }
   }
@@ -418,6 +419,7 @@ function automaticStyles(ctx: Ctx, model: DocumentModel): string {
     .join("");
   return `${textStyles}${paraStyles}${sectionStyles}${listStyles()}${ctx.colStyles.join("")}${cellStyles}${ctx.graphicStyles.join("")}
 <style:style style:name="PgBreak" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:break-after="page"/></style:style>
+<style:style style:name="ColBreak" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:break-after="column"/></style:style>
 <style:style style:name="Tbl" style:family="table"><style:table-properties style:width="${pxToCm(pageDimensions(model.page).w - marginsPx(model.page).left - marginsPx(model.page).right)}cm" table:align="margins"/></style:style>
 <style:style style:name="Cell" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #000000"/></style:style>
 <style:style style:name="CellHead" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #000000" fo:background-color="#f3f4f6"/></style:style>`;

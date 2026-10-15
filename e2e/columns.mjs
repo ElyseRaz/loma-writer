@@ -117,6 +117,42 @@ const ends = [0, 1].map((c) => Math.max(...gf.slice(1, -1).filter((p) => (c === 
 ok(Math.abs(ends[0] - ends[1]) < 140, `the two columns are balanced (end at ${ends.join(" and ")})`);
 ok((await run(() => window.__lomaAudit())).problems.length === 0, "and the layout is valid", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
 
+// --- lists, quotes and column breaks ---
+const li = (i) => `<li><p>Item ${i}. ${lorem}</p></li>`;
+await run((h) => window.__lomaEditor.commands.setContent(h), `<p>Intro. ${lorem}</p><ol>${Array.from({ length: 14 }, (_, i) => li(i + 1)).join("")}</ol><blockquote><p>Citation un. ${lorem.repeat(2)}</p><p>Citation deux. ${lorem.repeat(2)}</p></blockquote><ul>${Array.from({ length: 6 }, (_, i) => li(i + 1)).join("")}</ul><p>Fin. ${lorem}</p>`);
+await settle();
+await page.getByRole("tab", { name: "Mise en page" }).click();
+await menu("Colonnes", "Deux");
+await settle();
+const units = await run(() => { const st = document.querySelector(".page-stack"); const k = st.getBoundingClientRect().width / st.offsetWidth; const s0 = st.getBoundingClientRect(); return [...document.querySelectorAll(".ProseMirror [data-col]")].map((p) => { const r = p.getBoundingClientRect(); return { t: p.tagName, q: p.hasAttribute("data-col-quote"), x: Math.round((r.left - s0.left) / k), y: Math.round((r.top - s0.top) / k), w: Math.round(r.width / k), h: Math.round(r.height / k) }; }); });
+const lis = units.filter((u) => u.t === "LI");
+ok(lis.length === 20, `every list item is placed on its own (${lis.length}/20)`);
+ok(lis.some((u) => u.x < 200) && lis.some((u) => u.x > 400), "the items of a list run over both columns");
+ok(units.filter((u) => u.q).length === 2, "the paragraphs of the quote are placed one by one, with the look of a quote");
+let overlap2 = false;
+for (let i = 0; i < units.length; i++) for (let j = i + 1; j < units.length; j++) { const a = units[i], b = units[j]; if (Math.abs(a.x - b.x) < 5 && Math.abs(a.y - b.y) < 1000 && a.w < 300 && b.w < 300 && a.y < b.y + b.h - 2 && b.y < a.y + a.h - 2) overlap2 = true; }
+ok(!overlap2, "no two items overlap");
+// a list item keeps its number in the second column
+ok(await run(() => { const ol = document.querySelector(".ProseMirror ol"); const items = [...ol.children].filter((e) => e.tagName === "LI"); return items.length === 14 && getComputedStyle(items[0]).display === "list-item"; }), "the items are still a numbered list");
+const aL = await run(() => window.__lomaAudit());
+ok(aL.problems.length === 0, "the layout is valid", aL.problems.slice(0, 2).join(" | "));
+// typing inside a list item that sits in the second column
+await run(() => { const e = window.__lomaEditor; let pos = 0; e.state.doc.descendants((n, p) => { if (n.isText && n.text.startsWith("Item 12.")) pos = p + 3; }); e.commands.focus(); e.commands.setTextSelection(pos); });
+await page.keyboard.type("XYZ");
+await settle();
+ok((await run(() => window.__lomaEditor.getText())).includes("IteXYZm 12."), "typing in an item of the second column works");
+
+await run((h) => window.__lomaEditor.commands.setContent(h), `<p>Un. ${lorem}</p><p>Deux. ${lorem}</p><div data-column-break><span>Saut de colonne</span></div><p>Trois. ${lorem}</p><div data-column-break></div><p>Quatre. ${lorem}</p>`);
+await settle();
+const cb = await geo();
+ok(cb.length === 4 && cb[0].x === 96 && cb[1].x === 96, "before the column break: first column");
+ok(cb[2].x > 300 && cb[2].y === 96, `after the column break: top of the second column (x=${cb[2].x}, y=${cb[2].y})`);
+ok((await pages()) === 2 && cb[3].x === 96, `a second break on the last column goes to the next page (${await pages()} pages)`);
+ok((await run(() => window.__lomaAudit())).problems.length === 0, "and the layout is valid");
+await page.keyboard.press("Control+Shift+Enter");
+await settle();
+ok((await run(() => { let n = 0; window.__lomaEditor.state.doc.descendants((x) => { if (x.type.name === "columnBreak") n++; }); return n; })) >= 2, "Ctrl+Shift+Enter is wired (no crash)");
+
 ok(errors.length === 0, "no page errors", errors.join(" | "));
 await browser.close();
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nAll column checks passed");

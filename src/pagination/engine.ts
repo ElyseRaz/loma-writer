@@ -102,6 +102,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
         const a = atoms[k];
         if (lastPageFrom === -1) lastPageFrom = k;
         if (a.kind === "break") { pl.push({ page: p, x: colX(c), y: colTop(p) + y, width: cw }); if (!(c === 0 && y === 0 && firstInCol)) { p += 1; c = 0; y = 0; firstInCol = true; maxUsed = 0; lastPageFrom = -1; } continue; }
+        if (a.kind === "colbreak") { pl.push({ page: p, x: colX(c), y: colTop(p) + y, width: cw }); if (!(c === 0 && firstInCol)) next(); continue; }
         if (a.breakBefore && !(c === 0 && firstInCol)) { p += 1; c = 0; y = 0; firstInCol = true; maxUsed = 0; lastPageFrom = k; }
         const h = a.bottom - a.top;
         let placed: Placement | null = null;

@@ -25,6 +25,7 @@ interface Style {
   lineHeight?: string;
   breakBefore: boolean;
   breakAfter: boolean;
+  columnAfter: boolean;
   shading?: string;
   borders?: Record<string, boolean>;
   cellShading?: string;
@@ -200,6 +201,7 @@ function collectStyles(docs: Document[], ctx: Ctx) {
         lineHeight: lh?.endsWith("%") && Math.abs(parseFloat(lh) - 100) > 3 ? String(+(parseFloat(lh) / 100).toFixed(2)) : undefined,
         breakBefore: pp?.getAttribute("fo:break-before") === "page",
         breakAfter: pp?.getAttribute("fo:break-after") === "page",
+        columnAfter: pp?.getAttribute("fo:break-after") === "column",
         ...paragraphDeco(pp),
         ...cellDeco(first(s, "style:table-cell-properties")),
         gfx: graphicProps(first(s, "style:graphic-properties")),
@@ -524,7 +526,7 @@ function inlineOf(ctx: Ctx, parent: Element, base: RunProps, out: PM[]) {
   }
 }
 
-function convertPara(ctx: Ctx, el: Element): { node: PM; kind: Kind; before: boolean; after: boolean } {
+function convertPara(ctx: Ctx, el: Element): { node: PM; kind: Kind; before: boolean; after: boolean; column: boolean } {
   const styleName = el.getAttribute("text:style-name");
   let kind = kindOf(ctx, styleName);
   if (el.nodeName === "text:h") {
@@ -543,7 +545,7 @@ function convertPara(ctx: Ctx, el: Element): { node: PM; kind: Kind; before: boo
   const inline: PM[] = [];
   inlineOf(ctx, el, kind.kind === "heading" ? { ...base, bold: undefined, sizePt: undefined } : base, inline);
   const content = splitEquations(mergeText(inline));
-  return { node: kind.kind === "heading" ? heading(kind.level, content, align, deco) : paragraph(content, align, deco), kind, before: false, after: !!own?.breakAfter };
+  return { node: kind.kind === "heading" ? heading(kind.level, content, align, deco) : paragraph(content, align, deco), kind, before: false, after: !!own?.breakAfter, column: !!own?.columnAfter };
 }
 
 function convertTable(ctx: Ctx, tbl: Element): PM {
@@ -630,9 +632,10 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
             if (!el.textContent?.trim() && !el.children.length) break;
           }
         }
-        const { node, kind, before, after } = convertPara(ctx, el);
+        const { node, kind, before, after, column } = convertPara(ctx, el);
         if (before) { quote = code = null; out.push({ type: "pageBreak" }); }
         if (after && !node.content?.length) { quote = code = null; out.push({ type: "pageBreak" }); break; }
+        if (column && !node.content?.length) { quote = code = null; out.push({ type: "columnBreak" }); break; }
         if (kind.kind === "quote") { code = null; if (!quote) { quote = { type: "blockquote", content: [] }; out.push(quote); } quote.content!.push(node); }
         else if (kind.kind === "code") {
           quote = null;
@@ -641,6 +644,7 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
           else code.content = [{ type: "text", text: `${(code.content ?? []).map((c) => c.text).join("")}\n${text}` }];
         } else { quote = code = null; hoistShapes(node, out); }
         if (after) { quote = code = null; out.push({ type: "pageBreak" }); }
+        if (column) { quote = code = null; out.push({ type: "columnBreak" }); }
         break;
       }
       case "text:list": {

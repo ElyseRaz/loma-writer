@@ -161,6 +161,7 @@ export function CommandsProvider({ children }: { children: ReactNode }) {
     // ----- Insertion -----
     add({ id: "insert.link", label: "Lien hypertexte…", icon: Link, shortcut: "Ctrl+Shift+K", global: true, group: "Insertion", active: snap.link, run: () => set({ dialog: "link" }) });
     add({ id: "insert.pageBreak", label: "Saut de page", icon: SeparatorHorizontal, shortcut: "Ctrl+Enter", group: "Insertion", run: () => chain().insertPageBreak().run() });
+    add({ id: "insert.columnBreak", label: "Saut de colonne", icon: SeparatorHorizontal, shortcut: "Ctrl+Maj+Entrée", group: "Insertion", run: () => chain().insertColumnBreak().run() });
     add({ id: "insert.blankPage", label: "Page vierge", icon: FileText, group: "Insertion", run: () => chain().insertContent([{ type: "pageBreak" }, { type: "paragraph" }, { type: "pageBreak" }, { type: "paragraph" }]).run() });
     add({ id: "insert.textBox", label: "Zone de texte", icon: TextCursorInput, group: "Insertion", run: () => chain().insertShape("textbox").run() });
     add({ id: "insert.coverPage", label: "Page de garde…", icon: BookOpen, group: "Insertion", run: () => set({ dialog: "coverPage" }) });

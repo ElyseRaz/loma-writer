@@ -317,6 +317,18 @@ describe("columns", () => {
     expect(ys[1] - (ys[0] + (atoms[0].bottom - atoms[0].top))).toBeCloseTo(10, 5);
   });
 
+  it("a column break sends what follows to the next column, then to the next page", () => {
+    const atoms = blocks([2, 2, 2, 2]);
+    const withBreaks: Atom[] = [atoms[0], { ...atoms[1], kind: "colbreak" }, atoms[2], { ...atoms[3], kind: "colbreak" }, { ...atoms[0], top: atoms[3].bottom + 10, bottom: atoms[3].bottom + 10 + (atoms[0].bottom - atoms[0].top) }];
+    const res = paginate(withBreaks, two);
+    const pl = res.placements;
+    expect(pl[0]!.x).toBe(0);
+    expect(pl[2]!.x).toBeCloseTo(cw + two.columns!.gap, 5);
+    expect(pl[2]!.y).toBeCloseTo(0, 5);
+    expect(pl[4]!.page).toBe(1);
+    expect(pl[4]!.x).toBe(0);
+  });
+
   it("splits a long paragraph across the columns of a page", () => {
     const atoms = flow([8, 60]); // 60 lines do not fit in the rest of column 1 but fit in two columns
     const res = paginate(atoms, two);

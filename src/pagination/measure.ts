@@ -11,6 +11,10 @@ export interface AtomRef {
   columns: number;
   /** Table rows below header rows: the header rows to repeat after a page break. */
   headers: HTMLTableRowElement[];
+  /** Column sections: extra left offset (px) of a list item inside its list, to keep its bullet where it was. */
+  indent?: number;
+  /** Column sections: the unit is a child of a list or a quote (those containers are laid out by their items). */
+  inContainer?: "list" | "quote";
   /** Filled by `lines()` for text atoms: document position of the first character of each line. */
   lineStarts: number[];
 }
@@ -36,13 +40,19 @@ export function collectAtoms(view: EditorView, origin: number, scale: number, co
     const name = node.type.name;
     let kind: AtomKind | null = null;
     // In a section with several columns the atoms are the top-level blocks (lists, tables… are placed whole).
-    const inColumns = parent === doc && name !== "sectionBreak" && !!columnSections[sectionCounter];
+    const columnsHere = !!columnSections[sectionCounter];
+    const inColumns = parent === doc && name !== "sectionBreak" && columnsHere;
+    // Lists and quotes of a column section are cut into their items / paragraphs, each placed on its own.
+    const container: "list" | "quote" | null = parent === doc && columnsHere ? (name === "bulletList" || name === "orderedList" ? "list" : name === "blockquote" ? "quote" : null) : null;
+    if (container) return true;
+    const outer = parent && parent !== doc && columnsHere && doc.resolve(pos).depth === 1 ? (parent.type.name === "blockquote" ? "quote" : parent.type.name === "bulletList" || parent.type.name === "orderedList" ? "list" : null) : null;
     if (name === "sectionBreak") kind = "section";
-    if (inColumns) kind = TEXT_BLOCKS.has(name) ? "text" : name === "pageBreak" ? "break" : "block";
+    if (outer) kind = outer === "list" ? "block" : TEXT_BLOCKS.has(name) ? "text" : "block";
+    else if (inColumns) kind = TEXT_BLOCKS.has(name) ? "text" : name === "pageBreak" ? "break" : name === "columnBreak" ? "colbreak" : "block";
     else if (TEXT_BLOCKS.has(name)) kind = "text";
     else if (name === "tableRow") kind = "row";
     else if (name === "horizontalRule") kind = "block";
-    else if (name === "pageBreak") kind = "break";
+    else if (name === "pageBreak" || name === "columnBreak") kind = "break";
     else if (name === "shape" || name === "shapeGroup") kind = "block"; // drawn as a whole, never split across pages
     if (!kind) return true; // containers: lists, quotes, tables
     let el = view.nodeDOM(pos);
@@ -51,6 +61,11 @@ export function collectAtoms(view: EditorView, origin: number, scale: number, co
     if (el instanceof HTMLElement) {
       const r = el.getBoundingClientRect();
       const ref: AtomRef = { kind, pos, el, columns: 1, headers: [], lineStarts: [] };
+      if (outer) {
+        ref.inContainer = outer;
+        // A list item keeps the indent of its list (the list itself is not drawn any more): measured while the list is in the flow.
+        if (outer === "list" && el.parentElement) ref.indent = parseFloat(getComputedStyle(el.parentElement).paddingLeft) || 0;
+      }
       const atom: Atom = { kind, ...(kind === "section" ? { section: ++sectionCounter, ...(node.attrs.kind === "continuous" ? { continuous: true } : {}) } : {}), top: (r.top - origin) / scale, bottom: (r.bottom - origin) / scale, keepWithNext: name === "heading" || (kind === "text" && !!node.attrs.keepWithNext), ...(kind === "text" && node.attrs.pageBreakBefore ? { breakBefore: true } : {}), ...(kind === "text" && node.attrs.keepLines ? { keepLines: true } : {}) };
       if (kind === "row") ref.columns = Array.from((el as HTMLTableRowElement).cells ?? []).reduce((s, c) => s + (c.colSpan || 1), 0) || 1;
       if (kind === "row") {

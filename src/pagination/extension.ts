@@ -276,6 +276,7 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
   // The blocks of the columns: each one is drawn at its column slot (CSS variables, see the stylesheet).
   const doc = view.state.doc;
   const blockDecos: Decoration[] = [];
+  const boxes = new Set<number>();
   result.placements.forEach((pl, i) => {
     if (!pl) return;
     const pos = refs[i]?.pos;
@@ -284,10 +285,17 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
     const sheet = result.sheets[Math.min(pl.page, result.sheets.length - 1)];
     // Left and right indents of a paragraph come out of the width of its box (its margins are kept).
     const ind = (node.attrs.indentLeft || 0) + (node.attrs.indentRight || 0);
-    const width = Math.max(24, pl.width - ind * (96 / 2.54));
-    const vars = [`--col-x:${+(sheet.left + sheet.insetLeft + pl.x).toFixed(2)}px`, `--col-y:calc(${+pl.y.toFixed(2)}px - ${pl.page} * var(--pg-print-sub, 0px))`, `--col-w:${+width.toFixed(2)}px`];
+    const lead = refs[i]?.indent ?? 0; // list items: the indent of their (flattened) list
+    const width = Math.max(24, pl.width - lead - ind * (96 / 2.54));
+    // The container of a list item or of a quote paragraph is not drawn any more: it only passes its children through.
+    if (refs[i]?.inContainer) {
+      const $p = doc.resolve(pos);
+      const cpos = $p.before($p.depth);
+      if (!boxes.has(cpos)) { boxes.add(cpos); blockDecos.push(Decoration.node(cpos, cpos + $p.parent.nodeSize, { "data-col-box": "" })); }
+    }
+    const vars = [`--col-x:${+(sheet.left + sheet.insetLeft + pl.x + lead).toFixed(2)}px`, `--col-y:calc(${+pl.y.toFixed(2)}px - ${pl.page} * var(--pg-print-sub, 0px))`, `--col-w:${+width.toFixed(2)}px`];
     if (pl.split) vars.push(`--col-m:${pl.split.columns}`, `--col-gap:${+pl.split.gap.toFixed(2)}px`, `--col-h:${+pl.split.height.toFixed(2)}px`, `--col-off:${+pl.split.offset.toFixed(2)}px`);
-    blockDecos.push(Decoration.node(pos, pos + node.nodeSize, { "data-col": "", ...(pl.split ? { "data-col-split": "" } : {}), style: vars.join(";") }));
+    blockDecos.push(Decoration.node(pos, pos + node.nodeSize, { "data-col": "", ...(refs[i]?.inContainer === "quote" ? { "data-col-quote": "" } : {}), ...(pl.split ? { "data-col-split": "" } : {}), style: vars.join(";") }));
   });
   const decos = DecorationSet.create(view.state.doc, [...widgets, ...blockDecos]);
   const signature = `${signatureOf(result.pages, decos)}|${JSON.stringify(result.sheets.map((s) => [Math.round(s.top * 10), s.width, s.height, s.section]))}|${JSON.stringify(result.placements.map((p) => p && [p.page, Math.round(p.x), Math.round(p.y), Math.round(p.width), p.split?.columns ?? 0]))}|${JSON.stringify(result.bands.map((b) => [b.page, Math.round(b.top), Math.round(b.height)]))}`;

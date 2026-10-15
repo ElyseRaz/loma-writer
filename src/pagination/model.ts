@@ -36,7 +36,7 @@ export function pageGeometry(page: PageSetup, header = 0, footer = 0, gap = PAGE
 }
 
 /** One unit the engine lays out: a text block, a table row, a rule or a manual page break. */
-export type AtomKind = "text" | "row" | "block" | "break" | "section";
+export type AtomKind = "text" | "row" | "block" | "break" | "colbreak" | "section";
 
 export interface LineBox {
   top: number;

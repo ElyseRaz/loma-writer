@@ -222,6 +222,12 @@ describe("sections", () => {
     expect(shapeOf(back.content as never)).toEqual(want);
     expect(breaks(back.content as never)[0].attrs?.page).toMatchObject({ columns: { count: 2, line: true } });
   });
+  it("a column break survives DOCX and ODT", async () => {
+    const m: DocumentModel = { content: { type: "doc", content: [P("a"), { type: "columnBreak" }, P("b")] }, page: { ...DEFAULT_PAGE, columns: cols2 } };
+    for (const back of [(await importOdt((await exportOdt(m)).bytes)).model, (await importDocx((await exportDocx(m)).bytes)).model]) {
+      expect(shapeOf(back.content as never)).toEqual(["paragraph", "columnBreak", "paragraph"]);
+    }
+  });
   it("a next-page section with columns keeps both in ODT and DOCX", async () => {
     const m: DocumentModel = { content: { type: "doc", content: [P("a"), { type: "sectionBreak", attrs: { page: { ...DEFAULT_PAGE, columns: { count: 3, gapCm: 1, line: false } }, hf: null } }, P("b")] }, page: DEFAULT_PAGE };
     for (const back of [(await importOdt((await exportOdt(m)).bytes)).model, (await importDocx((await exportDocx(m)).bytes)).model]) {
