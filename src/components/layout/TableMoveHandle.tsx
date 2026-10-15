@@ -1,5 +1,5 @@
 import { Move } from "lucide-react";
-import { TextSelection } from "@tiptap/pm/state";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { cleanPlace } from "../../editor/TableLook";
@@ -108,7 +108,12 @@ export function TableMoveHandle({ editor }: { editor: Editor }) {
       dragging.current = false;
       wrapper.style.transform = "";
       setDrop(null);
-      if (!moved || ev.type === "pointercancel") return; // a plain click (or the first half of a double-click) moves nothing
+      if (ev.type === "pointercancel") return;
+      if (!moved) { // a plain click selects the whole table (and keeps the handle for a double-click)
+        editor.view.dispatch(editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, from)));
+        editor.view.focus();
+        return;
+      }
       setTable(null);
       const found = editor.state.doc.nodeAt(from);
       if (!found || found.type.name !== "table") return;
@@ -144,7 +149,7 @@ export function TableMoveHandle({ editor }: { editor: Editor }) {
       <button
         type="button"
         data-table-move
-        title="Déplacer le tableau : glisser n'importe où, marges comprises (double-clic : le remettre dans le texte)"
+        title="Sélectionner le tableau (clic) ou le déplacer : glisser n'importe où, marges comprises (double-clic : le remettre dans le texte)"
         aria-label="Déplacer le tableau"
         onMouseDown={(e) => e.preventDefault()}
         onPointerDown={start}

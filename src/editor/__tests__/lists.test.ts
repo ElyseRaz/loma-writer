@@ -128,3 +128,40 @@ describe("table position and style", () => {
     expect(cleanPlace({ x: -30.4, w: 400.2 })).toEqual({ x: -30, w: 400 });
   });
 });
+
+describe("row height", () => {
+  const model = (): DocumentModel => ({
+    content: { type: "doc", content: [{ type: "table", content: [
+      { type: "tableRow", attrs: { rowHeight: 120 }, content: [{ type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }] }] },
+      { type: "tableRow", content: [{ type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "B" }] }] }] },
+    ] }] },
+    page: DEFAULT_PAGE,
+  });
+  const heights = (j: JSONContent) => (j.content?.[0].content ?? []).map((r) => r.attrs?.rowHeight ?? null);
+  it("is kept by DOCX", async () => expect(heights((await importDocx((await exportDocx(model())).bytes)).model.content)).toEqual([120, null]));
+  it("is kept by ODT", async () => expect(heights((await importOdt((await exportOdt(model())).bytes)).model.content)).toEqual([120, null]));
+});
+
+describe("floating pictures", () => {
+  const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADq0kPzxQAAAAAElFTkSuQmCC";
+  const model = (attrs: Record<string, unknown>): DocumentModel => ({ content: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "x" }, { type: "image", attrs: { src: PNG, width: 80, height: 80, ...attrs } }] }] }, page: DEFAULT_PAGE });
+  it("a picture in front of the text is anchored on the page in DOCX, with its rotation", async () => {
+    const zip = await (await import("jszip")).default.loadAsync((await exportDocx(model({ wrap: "front", anchor: "page", x: 100, y: 200, rotation: 30 }))).bytes);
+    const xml = await zip.file("word/document.xml")!.async("string");
+    expect(xml).toContain("<wp:anchor");
+    expect(xml).toMatch(/<wp:positionH relativeFrom="page">\s*<wp:posOffset>952500</);
+    expect(xml).toMatch(/rot="1800000"/);
+  });
+  it("a picture behind the text is flagged as such, and ODT keeps its position", async () => {
+    const zip = await (await import("jszip")).default.loadAsync((await exportDocx(model({ wrap: "behind", x: 10, y: 20 }))).bytes);
+    expect(await zip.file("word/document.xml")!.async("string")).toMatch(/behindDoc="1"/);
+    const odt = await (await import("jszip")).default.loadAsync((await exportOdt(model({ wrap: "front", x: 96, y: 192 }))).bytes);
+    const content = await odt.file("content.xml")!.async("string");
+    expect(content).toMatch(/svg:x="2\.54\d?cm" svg:y="5\.08\d?cm"/);
+    expect(content).toContain('style:run-through="foreground"');
+  });
+  it("an inline picture stays inline", async () => {
+    const xml = await (await (await import("jszip")).default.loadAsync((await exportDocx(model({}))).bytes)).file("word/document.xml")!.async("string");
+    expect(xml).not.toContain("<wp:anchor");
+  });
+});

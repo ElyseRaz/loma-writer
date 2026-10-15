@@ -149,7 +149,7 @@ function layoutBox(anchor: HTMLElement, box: HTMLElement, a: Placement & { heigh
 }
 
 /** Free (front/behind) shapes: absolute position from the paragraph or from the page the anchor is on. */
-function placeFloating(anchor: HTMLElement, box: HTMLElement, a: Placement): void {
+export function placeFloating(anchor: HTMLElement, box: HTMLElement, a: Placement): void {
   if (a.wrap !== "front" && a.wrap !== "behind") return;
   if (a.anchor === "paragraph") { box.style.left = `${a.x}px`; box.style.top = `${a.y}px`; return; }
   const stack = anchor.closest<HTMLElement>(".page-stack");
@@ -262,9 +262,94 @@ function makeView(kind: "shape" | "group") {
       const h0 = Math.max(a.height, box.offsetHeight);
       drag(e, (dx, dy) => ({ width: Math.max(MIN_SIZE, a.width + dx), height: Math.max(MIN_SIZE, h0 + dy) }));
     });
-    move.addEventListener("mousedown", (e) => {
-      const a = attrs();
-      drag(e, (dx, dy) => ({ x: Math.round(a.x + dx), y: Math.round(a.y + dy) }));
+    // Moving: inside a group the children move within the group's box; anywhere else the shape becomes free
+    // (in front of the text, positioned on the page) and follows the pointer over the whole page, margins and other pages included.
+    const startMove = (e: MouseEvent, threshold: number) => {
+      if (isGroupChild()) { drag(e, (dx, dy) => ({ x: Math.round(attrs().x + dx), y: Math.round(attrs().y + dy) })); return; }
+      const stack = anchor.closest<HTMLElement>(".page-stack");
+      const pitch = Number(stack?.dataset.pitch) || 0;
+      const pos0 = getPos();
+      if (!stack || !pitch || pos0 === undefined) { drag(e, (dx, dy) => ({ x: Math.round(attrs().x + dx), y: Math.round(attrs().y + dy) })); return; }
+      const a0 = attrs();
+      const s = stack.getBoundingClientRect();
+      const scale = s.width / stack.offsetWidth || 1;
+      const r = box.getBoundingClientRect();
+      // Top-left of the unrotated box, in page-stack px (the bounding rect of a rotated box is larger).
+      const absX0 = (r.left + r.width / 2 - s.left) / scale - a0.width / 2;
+      const absY0 = (r.top + r.height / 2 - s.top) / scale - Math.max(a0.height, box.offsetHeight) / 2;
+      const pageW = stack.offsetWidth;
+      const anchorRect = anchor.getBoundingClientRect();
+      const anchorPage = Math.max(0, Math.floor(((anchorRect.top - s.top) / scale + 1) / pitch));
+      const startX = e.clientX, startY = e.clientY;
+      let started = false;
+      let pos = { x: absX0, y: absY0 };
+      const place = () => {
+        // Anywhere on the sheet, margins included, never outside the paper.
+        const x = Math.round(Math.min(Math.max(pos.x, 0), Math.max(0, pageW - a0.width)));
+        const sheet = stack.querySelector<HTMLElement>(".page-sheet");
+        const pages = Number(stack.dataset.pages) || 1;
+        const maxY = sheet ? (pages - 1) * pitch + sheet.offsetHeight - Math.max(a0.height, box.offsetHeight) : Infinity;
+        const y = Math.round(Math.min(Math.max(pos.y, 0), Math.max(0, maxY)));
+        return { x, y };
+      };
+      const draftOf = () => { const p = place(); return { ...a0, wrap: a0.wrap === "behind" ? "behind" : "front", anchor: "page", x: p.x, y: p.y - anchorPage * pitch } as ShapeAttrs; };
+      const onMoveEv = (ev: MouseEvent) => {
+        if (!started && Math.hypot(ev.clientX - startX, ev.clientY - startY) < threshold) return;
+        started = true;
+        ev.preventDefault();
+        pos = { x: absX0 + (ev.clientX - startX) / scale, y: absY0 + (ev.clientY - startY) / scale };
+        const draft = draftOf();
+        layoutBox(anchor, box, draft, kind === "shape" && isTextBox(draft.kind), false);
+        if (kind === "shape") art.innerHTML = shapeSvg(draft);
+        placeFloating(anchor, box, draft);
+        box.classList.add("shape-floating", "shape-dragging");
+      };
+      const up = () => {
+        window.removeEventListener("mousemove", onMoveEv);
+        window.removeEventListener("mouseup", up);
+        box.classList.remove("shape-dragging");
+        if (!started) { // a plain click on the handle selects the shape
+          const at = getPos();
+          if (at !== undefined) { editor.commands.setNodeSelection(at); editor.view.focus(); } // focus: Ctrl+C / Suppr work right away
+          return;
+        }
+        const p = place();
+        const targetPage = Math.max(0, Math.floor((p.y + 1) / pitch));
+        const attrsNext = (kind === "shape" ? cleanShapeAttrs : (x: Partial<ShapeAttrs>, b: ShapeAttrs) => ({ ...cleanPlacement(x, b), alt: b.alt }))({ ...a0, wrap: draftOf().wrap, anchor: "page", x: p.x, y: p.y - targetPage * pitch }, a0);
+        const cur = getPos();
+        if (cur === undefined) return;
+        const tr = editor.state.tr;
+        // Dropped on another page: the shape is re-anchored to a paragraph of that page, so it stays there when the text reflows.
+        if (targetPage !== anchorPage) {
+          let at = editor.state.doc.content.size;
+          let found = false;
+          editor.state.doc.forEach((n, off) => {
+            if (found || off === cur) return;
+            const dom = editor.view.nodeDOM(off);
+            if (!(dom instanceof HTMLElement) || n.type.name === "shape" || n.type.name === "shapeGroup") return;
+            const top = (dom.getBoundingClientRect().top - s.top) / scale;
+            if (top >= targetPage * pitch - 2) { at = off; found = true; }
+          });
+          const node = editor.state.doc.nodeAt(cur)!.type.create(attrsNext, editor.state.doc.nodeAt(cur)!.content);
+          const size = editor.state.doc.nodeAt(cur)!.nodeSize;
+          tr.delete(cur, cur + size);
+          tr.insert(at > cur ? at - size : at, node);
+        } else tr.setNodeMarkup(cur, undefined, attrsNext);
+        editor.view.dispatch(tr);
+      };
+      window.addEventListener("mousemove", onMoveEv);
+      window.addEventListener("mouseup", up);
+    };
+    move.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); startMove(e, 0); });
+    // Dragging the shape itself (not its text, not the handles) moves it too; a small threshold keeps plain clicks as clicks.
+    box.addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || [resize, rotate, move].some((h) => h.contains(e.target as globalThis.Node))) return;
+      const r = box.getBoundingClientRect();
+      const edge = Math.min(e.clientX - r.left, r.right - e.clientX, e.clientY - r.top, r.bottom - e.clientY) < 7;
+      const inText = contentDOM.contains(e.target as globalThis.Node) && (contentDOM.textContent ?? "").length > 0 && !edge; // an empty shape is dragged from anywhere, one with text from its border
+      if (inText && kind === "shape") return; // the text of the shape is being edited
+      if (kind === "group" && e.target !== box && !(e.target as HTMLElement).closest?.(".shape-art")) return;
+      startMove(e, 4);
     });
     rotate.addEventListener("mousedown", (e) => {
       const r = box.getBoundingClientRect();

@@ -1,3 +1,4 @@
+import { copySelection, isObjectSelection, pasteInternal } from "./InternalClipboard";
 import { TextGrow, TextShrink } from "../components/ui/TextSizeIcons";
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
@@ -95,16 +96,19 @@ export function CommandsProvider({ children }: { children: ReactNode }) {
     if (!editor) return Object.fromEntries(list.map((c) => [c.id, c]));
 
     // ----- Édition -----
-    add({ id: "edit.undo", label: "Annuler", icon: Undo2, shortcut: "Ctrl+Z", group: "Édition", disabled: !snap.canUndo, run: () => chain().undo().run() });
-    add({ id: "edit.redo", label: "Rétablir", icon: Redo2, shortcut: "Ctrl+Y", group: "Édition", disabled: !snap.canRedo, run: () => chain().redo().run() });
-    add({ id: "edit.cut", label: "Couper", icon: Scissors, shortcut: "Ctrl+X", group: "Édition", disabled: !snap.hasSelection, run: () => { editor.commands.focus(); document.execCommand("cut"); } });
-    add({ id: "edit.copy", label: "Copier", icon: Copy, shortcut: "Ctrl+C", group: "Édition", disabled: !snap.hasSelection, run: () => { editor.commands.focus(); document.execCommand("copy"); } });
+    add({ id: "edit.undo", label: "Annuler", icon: Undo2, shortcut: "Ctrl+Z", global: true, group: "Édition", disabled: !snap.canUndo, run: () => chain().undo().run() });
+    add({ id: "edit.redo", label: "Rétablir", icon: Redo2, shortcut: "Ctrl+Y", global: true, group: "Édition", disabled: !snap.canRedo, run: () => chain().redo().run() });
+    add({ id: "edit.cut", label: "Couper", icon: Scissors, shortcut: "Ctrl+X", group: "Édition", disabled: !snap.hasSelection, run: () => { editor.commands.focus(); if (isObjectSelection(editor.view)) copySelection(editor.view, true); else document.execCommand("cut"); } });
+    add({ id: "edit.copy", label: "Copier", icon: Copy, shortcut: "Ctrl+C", group: "Édition", disabled: !snap.hasSelection, run: () => { editor.commands.focus(); if (isObjectSelection(editor.view)) copySelection(editor.view); else document.execCommand("copy"); } });
     add({
       id: "edit.paste", label: "Coller", icon: ClipboardPaste, shortcut: "Ctrl+V", group: "Édition",
       run: () => {
-        navigator.clipboard.readText().then(
-          (text) => chain().insertContent(text.split(/\r?\n/).map((l) => ({ type: "paragraph", content: l ? [{ type: "text", text: l }] : [] }))).run(),
-          () => notify("Le presse-papiers n'est pas accessible : utilisez Ctrl+V.", "error"),
+        const pasteText = (text: string) => chain().insertContent(text.split(/\r?\n/).map((l) => ({ type: "paragraph", content: l ? [{ type: "text", text: l }] : [] }))).run();
+        const clip = navigator.clipboard?.readText ? navigator.clipboard.readText() : Promise.reject(new Error("no clipboard"));
+        clip.then(
+          (text) => { if (!pasteInternal(editor.view, text)) pasteText(text); },
+          // The system clipboard cannot be read (or is empty of text, as after copying a picture): use the editor's own copy.
+          () => { if (!pasteInternal(editor.view, null)) notify("Le presse-papiers n'est pas accessible : utilisez Ctrl+V.", "error"); },
         );
       },
     });
@@ -199,8 +203,20 @@ export function CommandsProvider({ children }: { children: ReactNode }) {
     // Layout-independent keys: on AZERTY, digits need Shift and "=" lives elsewhere.
     const CODES: Record<string, string[]> = { "0": ["Digit0", "Numpad0"], "=": ["Equal", "NumpadAdd"], "-": ["Minus", "NumpadSubtract"] };
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.repeat || dialogRef.current) return;
+      if (!(e.ctrlKey || e.metaKey) || dialogRef.current) return;
+      if (e.defaultPrevented) return; // the editor already handled it (its own undo/redo keymap)
       const key = e.key === "+" ? "=" : e.key.toLowerCase();
+      // Undo / redo of the document work from anywhere (ribbon, handles, canvas), except inside a text field that has its own history.
+      if (key === "z" || key === "y") {
+        const t = e.target as HTMLElement | null;
+        if (t?.closest?.("input, textarea, select, [contenteditable=true]") && !t.closest?.(".ProseMirror")) return;
+        e.preventDefault();
+        const id = key === "y" || e.shiftKey ? "edit.redo" : "edit.undo";
+        const c = commandsRef.current[id];
+        if (c && !c.disabled) c.run();
+        return;
+      }
+      if (e.repeat) return;
       for (const c of Object.values(commandsRef.current)) {
         if (!c.global || !c.shortcut) continue;
         const parts = c.shortcut.toLowerCase().split("+");

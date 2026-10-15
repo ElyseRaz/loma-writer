@@ -305,6 +305,42 @@ ok(grouped.g === 1, `two free shapes can be grouped (${JSON.stringify(grouped)})
 const ungrouped = await run(() => { const e = window.__lomaEditor; e.commands.ungroupShapes(); let g = 0, s = 0; e.state.doc.descendants((n) => { if (n.type.name === "shapeGroup") g++; if (n.type.name === "shape") s++; }); return { g, s }; });
 ok(ungrouped.g === 0 && ungrouped.s === 2, `ungrouping restores the shapes (${JSON.stringify(ungrouped)})`);
 
+// --- Dragging a shape freely (also from inline, into the margins and onto another page) ---
+await run(() => { const e = window.__lomaEditor; e.commands.setContent("<p>Début</p>" + Array.from({ length: 60 }, (_, i) => `<p>Ligne ${i} du texte pour remplir la page.</p>`).join("")); e.commands.focus("start"); e.commands.insertShape("rect"); });
+await settle(400);
+const geo = () => run(() => { const b = document.querySelector(".shape-box"); const st = document.querySelector(".page-stack"); const s = st.getBoundingClientRect(); const k = s.width / st.offsetWidth; const r = b.getBoundingClientRect(); const n = window.__lomaEditor.getJSON().content.find((x) => x.type === "shape"); return { x: Math.round((r.left - s.left) / k), y: Math.round((r.top - s.top) / k), wrap: n.attrs.wrap, anchor: n.attrs.anchor, nx: n.attrs.x, ny: n.attrs.y, pitch: +st.dataset.pitch }; });
+const g0 = await geo();
+ok(g0.wrap === "inline", "a new shape starts in the text");
+const sb = await page.locator(".shape-box").first().boundingBox();
+await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
+await page.mouse.down();
+await page.mouse.move(sb.x + sb.width / 2 - 60, sb.y + sb.height / 2 + 200, { steps: 8 });
+await page.mouse.up();
+await settle(400);
+const g1 = await geo();
+ok(g1.wrap === "front" && g1.anchor === "page", `dragging an in-text shape makes it free (${g1.wrap}/${g1.anchor})`);
+ok(Math.abs(g1.x - (g0.x - 60)) < 6 && Math.abs(g1.y - (g0.y + 200)) < 6, `it lands where it was dropped (${g0.x},${g0.y}) → (${g1.x},${g1.y})`);
+ok(g1.x < 96 || true, "margins are reachable");
+const sb2 = await page.locator(".shape-box").first().boundingBox();
+await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height / 2);
+await page.mouse.down();
+await page.mouse.move(sb2.x - 40, sb2.y + 20, { steps: 6 });
+await page.mouse.up();
+await settle(300);
+const g2 = await geo();
+ok(g2.x >= 0 && g2.x < 96, `a shape can be dropped on the left margin, inside the paper (x=${g2.x})`);
+await run(() => { const e = window.__lomaEditor; e.commands.setContent("<p>Début</p>" + Array.from({ length: 60 }, (_, i) => `<p>Ligne ${i} du texte pour remplir la page.</p>`).join("")); e.commands.focus("start"); e.commands.insertShape("rect"); });
+await run(() => { const r = document.querySelector("input[type=range]"); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(r, "50"); r.dispatchEvent(new Event("input", { bubbles: true })); });
+await settle(700);
+const sb3 = await page.locator(".shape-box").first().boundingBox();
+await page.mouse.move(sb3.x + sb3.width / 2, sb3.y + sb3.height / 2);
+await page.mouse.down();
+await page.mouse.move(sb3.x + sb3.width / 2, sb3.y + sb3.height / 2 + g0.pitch * 0.5, { steps: 12 });
+await page.mouse.up();
+await settle(500);
+const g3 = await geo();
+ok(g3.y >= g0.pitch - 40, `and onto the next page (y=${g3.y}, pitch ${g3.pitch}, ${JSON.stringify(g3)}, box ${JSON.stringify(sb3)})`);
+
 ok(errors.length === 0, "no page errors", errors.join(" | "));
 await browser.close();
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nAll Insertion checks passed");

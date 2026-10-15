@@ -6,6 +6,10 @@ import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
 import CharacterCount from "@tiptap/extension-character-count";
 import { TableLookExtension } from "./TableLook";
+import { ObjectPlacement } from "./ObjectPlacement";
+import { InternalClipboard } from "./InternalClipboard";
+import { pictureAttributes, pictureView } from "./ImageView";
+import { TableRowResize } from "./TableRowResize";
 import { TableFit } from "./TableFit";
 import { ListTypes } from "./ListTypes";
 import { PageBreak } from "./PageBreak";
@@ -40,14 +44,18 @@ export function createExtensions(options: { pagination?: boolean } = {}): Extens
           parseHTML: (el: HTMLElement) => el.getAttribute(name),
           renderHTML: (attrs: Record<string, unknown>) => (attrs[name] ? { [name]: attrs[name] } : {}),
         });
-        return { ...this.parent?.(), width: size("width"), height: size("height") };
+        return { ...this.parent?.(), width: size("width"), height: size("height"), ...pictureAttributes() };
       },
+      addNodeView: () => pictureView as never,
     }).configure({ inline: true, allowBase64: true }),
     Placeholder.configure({ placeholder: "Commencez à écrire…" }),
     PageBreak,
     ...(options.pagination === false ? [] : [Pagination]),
     BlockStyle,
     TableFit,
+    InternalClipboard,
+    ObjectPlacement,
+    TableRowResize,
     TableLookExtension,
     ListTypes,
     Bookmark,

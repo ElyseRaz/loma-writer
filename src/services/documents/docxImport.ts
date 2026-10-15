@@ -619,7 +619,9 @@ function convertTable(ctx: Ctx, tbl: Element): PM {
       cells.push(cell);
       col += span;
     }
-    rows.push({ type: "tableRow", content: cells });
+    const trH = child(child(tr, "w:trPr") ?? tr, "w:trHeight");
+    const rowHeight = trH && trH.getAttribute("w:val") ? Math.round(+trH.getAttribute("w:val")! / 15) : 0;
+    rows.push({ type: "tableRow", ...(rowHeight >= 18 && rowHeight <= 1500 ? { attrs: { rowHeight } } : {}), content: cells });
   }
   return { type: "table", content: rows };
 }

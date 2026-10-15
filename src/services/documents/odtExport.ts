@@ -1,3 +1,4 @@
+import { cleanRowHeight } from "../../editor/TableRowResize";
 import { cleanPlace } from "../../editor/TableLook";
 import { cellLook, cleanLook, tint, type Line } from "../../editor/tableStyles";
 import { resolveStyle, type StyleId } from "../../editor/docStyles";
@@ -72,6 +73,7 @@ class Ctx {
   }
 
   cellStyles = new Map<string, string>();
+  rowStyles = 0;
 
   /** Automatic table-cell style: fill and the four borders (`none` or `0.5pt solid #rrggbb`). */
   cellStyle(spec: { fill: string | null; top: string; bottom: string; left: string; right: string }): string {
@@ -134,7 +136,21 @@ function image(ctx: Ctx, n: PM): string {
   const name = `Pictures/${ctx.prefix.toLowerCase()}image${ctx.pictures.length + 1}.${ext}`;
   ctx.pictures.push({ name, bytes: data.bytes });
   const alt = n.attrs?.alt ? `<svg:desc>${esc(String(n.attrs.alt))}</svg:desc>` : "";
-  return `<draw:frame draw:name="Image${++ctx.frames}" text:anchor-type="as-char" svg:width="${pxToCm(w)}cm" svg:height="${pxToCm(h)}cm"><draw:image xlink:href="${name}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>${alt}</draw:frame>`;
+  const wrap = String(n.attrs?.wrap ?? "inline");
+  const rotation = Number(n.attrs?.rotation) || 0;
+  let anchor = "as-char";
+  let place = "";
+  let style = "";
+  if (wrap !== "inline") {
+    const x = Number(n.attrs?.x) || 0, y = Number(n.attrs?.y) || 0;
+    const onPage = wrap === "front" || wrap === "behind";
+    anchor = onPage ? "paragraph" : "paragraph";
+    const sname = `${ctx.prefix}Pic${ctx.graphicStyles.length + 1}`;
+    ctx.graphicStyles.push(`<style:style style:name="${sname}" style:family="graphic"><style:graphic-properties style:wrap="${onPage ? "run-through" : "parallel"}"${onPage ? ` style:run-through="${wrap === "behind" ? "background" : "foreground"}"` : ""} style:horizontal-pos="from-left" style:horizontal-rel="${onPage ? "page" : "paragraph"}" style:vertical-pos="from-top" style:vertical-rel="${onPage ? "page" : "paragraph"}"/></style:style>`);
+    style = ` draw:style-name="${sname}" draw:z-index="${Math.max(0, 50 + (Number(n.attrs?.z) || 0))}"`;
+    place = rotation ? ` draw:transform="rotate (${(-rotation * Math.PI / 180).toFixed(6)}) translate (${pxToCm(x)}cm ${pxToCm(y)}cm)"` : ` svg:x="${pxToCm(x)}cm" svg:y="${pxToCm(y)}cm"`;
+  } else if (rotation) place = ` draw:transform="rotate (${(-rotation * Math.PI / 180).toFixed(6)})"`;
+  return `<draw:frame draw:name="Image${++ctx.frames}"${style} text:anchor-type="${anchor}"${place} svg:width="${pxToCm(w)}cm" svg:height="${pxToCm(h)}cm"><draw:image xlink:href="${name}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>${alt}</draw:frame>`;
 }
 
 const lineHeightOf = (content: PM[] = []): string | undefined =>
@@ -291,7 +307,10 @@ function table(ctx: Ctx, n: PM): string {
   if (place) ctx.colStyles.push(`<style:style style:name="${ctx.prefix}TblP${id}" style:family="table"><style:table-properties style:width="${pxToCm(place.w)}cm" table:align="left" fo:margin-left="${pxToCm(place.x)}cm"/></style:style>`);
   const renderRow = (row: PM, r: number): string => {
     let col = 0;
-    let out = "<table:table-row>";
+    const rh = cleanRowHeight(row.attrs?.rowHeight);
+    let rowStyle = "";
+    if (rh) { const name = `${ctx.prefix}Row${++ctx.rowStyles}`; ctx.colStyles.push(`<style:style style:name="${name}" style:family="table-row"><style:table-row-properties style:min-row-height="${pxToCm(rh)}cm"/></style:style>`); rowStyle = ` table:style-name="${name}"`; }
+    let out = `<table:table-row${rowStyle}>`;
     const cover = () => { while (col < cols && pending[col] > 0) { out += "<table:covered-table-cell/>"; pending[col]--; col++; } };
     for (const cell of row.content ?? []) {
       cover();

@@ -1,4 +1,6 @@
 import { EditorContent } from "@tiptap/react";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
+import { CellSelection } from "@tiptap/pm/tables";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { applyFormat } from "../../editor/formatPainter";
 import { useCommandMap } from "../../editor/commands";
@@ -15,6 +17,7 @@ import type { Anchor } from "../ui/Popover";
 import { PageSheets, type HeaderFooterHeights } from "./PageSheets";
 import { Ruler } from "./Ruler";
 import { ShapeToolbar } from "./ShapeToolbar";
+import { ImageToolbar } from "./ImageToolbar";
 import { TableMoveHandle } from "./TableMoveHandle";
 import { TableInsertHandles } from "./TableInsertHandles";
 import { TableToolbar } from "./TableToolbar";
@@ -65,6 +68,65 @@ export function DocumentCanvas() {
     }
     style.textContent = `@page { size: ${geometry.width}px ${geometry.height}px; margin: 0; }`;
   }, [geometry.width, geometry.height]);
+
+  // A click on the sheet (margins, between pages, the grey around them) or on text releases the selected picture, shape or table.
+  useEffect(() => {
+    if (!editor) return;
+    const keep = "img-box, .shape-box, .img-anchor, .shape-anchor, table, [role=toolbar], [role=menu], [role=dialog], button, input, select, textarea, [data-table-move], [data-table-insert], [data-row-resize-line]";
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.button !== 0 || !t?.closest?.("[data-canvas]") || t.closest(`.${keep}`) || t.closest(".ProseMirror")) return;
+      const sel = editor.state.selection;
+      const object = sel instanceof NodeSelection ? ["image", "shape", "shapeGroup"].includes(sel.node.type.name) : sel instanceof CellSelection;
+      if (!object) return;
+      const box = editor.view.dom.getBoundingClientRect();
+      const at = editor.view.posAtCoords({ left: Math.min(Math.max(e.clientX, box.left + 1), box.right - 1), top: Math.min(Math.max(e.clientY, box.top + 1), box.bottom - 1) });
+      const pos = at ? at.pos : sel.to;
+      const tr = editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(Math.min(pos, editor.state.doc.content.size)), 1));
+      editor.view.dispatch(tr);
+      editor.view.focus();
+    };
+    // Double-click on the sheet (a margin, the blank below the text) puts the caret there, adding empty paragraphs when the click is
+    // below the end of the text (Word's "click and type"). Double-clicks on text keep selecting a word.
+    const onDouble = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.button !== 0 || !t?.closest?.("[data-canvas]") || t.closest(`.${keep}`)) return;
+      if (t.closest(".ProseMirror") && t !== editor.view.dom) return;
+      e.preventDefault();
+      const view = editor.view;
+      const box = view.dom.getBoundingClientRect();
+      const doc = view.state.doc;
+      const stack = view.dom.closest<HTMLElement>(".page-stack");
+      const scale = stack ? stack.getBoundingClientRect().width / stack.offsetWidth || 1 : 1;
+      let lastBottom = box.top;
+      let lastOff = -1;
+      doc.forEach((_n, off) => {
+        const dom = view.nodeDOM(off);
+        if (dom instanceof HTMLElement && dom.getBoundingClientRect().height > 0) { lastBottom = dom.getBoundingClientRect().bottom; lastOff = off; }
+      });
+      const lastNode = lastOff >= 0 ? doc.nodeAt(lastOff) : null;
+      if (lastNode && e.clientY > lastBottom + 12) {
+        // Below the end of the text: empty paragraphs down to the click (one per line of the last paragraph, at most 60).
+        const lastDom = view.nodeDOM(lastOff) as HTMLElement;
+        const style = getComputedStyle(lastNode.type.name === "paragraph" ? lastDom : view.dom);
+        const step = Math.max(12, ((parseFloat(style.lineHeight) || 24) + (parseFloat(style.marginBottom) || 0)) * scale);
+        const lines = Math.min(60, Math.max(1, Math.floor((e.clientY - lastBottom) / step)));
+        const emptyLast = lastNode.type.name === "paragraph" && lastNode.content.size === 0;
+        const add = emptyLast ? lines - 1 : lines;
+        const tr = view.state.tr;
+        if (add > 0) tr.insert(doc.content.size, Array.from({ length: add }, () => view.state.schema.nodes.paragraph.create()));
+        tr.setSelection(TextSelection.near(tr.doc.resolve(tr.doc.content.size - 1), -1));
+        view.dispatch(tr.scrollIntoView());
+      } else {
+        const at = view.posAtCoords({ left: Math.min(Math.max(e.clientX, box.left + 1), box.right - 1), top: Math.min(Math.max(e.clientY, box.top + 1), box.bottom - 1) });
+        if (at) view.dispatch(view.state.tr.setSelection(TextSelection.near(doc.resolve(at.pos), 1)));
+      }
+      view.focus();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("dblclick", onDouble);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("dblclick", onDouble); };
+  }, [editor]);
 
   // Double-click on an equation edits it.
   useEffect(() => {
@@ -126,6 +188,7 @@ export function DocumentCanvas() {
       {editor && snap.inTable && <TableToolbar editor={editor} />}
       {editor && <TableInsertHandles editor={editor} />}
       {editor && <TableMoveHandle editor={editor} />}
+      {editor && <ImageToolbar editor={editor} />}
       <DocStylesCss />
       {editor && <ShapeToolbar editor={editor} />}
       <div className="flex w-max min-w-full justify-center px-8 py-6">

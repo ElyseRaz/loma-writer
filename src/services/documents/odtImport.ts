@@ -25,6 +25,8 @@ interface Style {
   borders?: Record<string, boolean>;
   cellShading?: string;
   cellBorderless?: boolean;
+  /** Minimum row height of a table-row style, in px. */
+  rowHeightPx?: number;
   /** `style:graphic-properties` attributes (shapes, text frames). */
   gfx?: Record<string, string>;
   /** automatic styles always apply; named paragraph styles only when they are not generic body styles */
@@ -131,6 +133,7 @@ function collectStyles(docs: Document[], ctx: Ctx) {
     for (const s of Array.from(doc.getElementsByTagName("style:style"))) {
       const name = s.getAttribute("style:name");
       if (!name) continue;
+      const rowProps = first(s, "style:table-row-properties");
       const pp = first(s, "style:paragraph-properties");
       const lh = pp?.getAttribute("fo:line-height");
       ctx.styles.set(name, {
@@ -146,6 +149,7 @@ function collectStyles(docs: Document[], ctx: Ctx) {
         ...paragraphDeco(pp),
         ...cellDeco(first(s, "style:table-cell-properties")),
         gfx: graphicProps(first(s, "style:graphic-properties")),
+        rowHeightPx: rowProps ? px(rowProps.getAttribute("style:min-row-height") ?? rowProps.getAttribute("style:row-height")) ?? undefined : undefined,
         automatic: s.parentNode?.nodeName === "office:automatic-styles",
       });
       if (s.getAttribute("style:family") === "table-column") {
@@ -519,7 +523,7 @@ function convertTable(ctx: Ctx, tbl: Element): PM {
             col += colspan;
           }
         }
-        for (let i = 0; i < Math.min(100, +(r.getAttribute("table:number-rows-repeated") ?? 1)); i++) rows.push({ type: "tableRow", content: JSON.parse(JSON.stringify(cells)) });
+        for (let i = 0; i < Math.min(100, +(r.getAttribute("table:number-rows-repeated") ?? 1)); i++) { const h = ctx.styles.get(r.getAttribute("table:style-name") ?? "")?.rowHeightPx; rows.push({ type: "tableRow", ...(h && h >= 18 && h <= 1500 ? { attrs: { rowHeight: Math.round(h) } } : {}), content: JSON.parse(JSON.stringify(cells)) }); }
       }
     }
   };

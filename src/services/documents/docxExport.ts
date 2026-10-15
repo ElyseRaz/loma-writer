@@ -1,10 +1,11 @@
+import { cleanRowHeight } from "../../editor/TableRowResize";
 import { cleanPlace } from "../../editor/TableLook";
 import { cellLook, cleanLook, tint, type Line } from "../../editor/tableStyles";
 import { resolveStyle, type StyleId } from "../../editor/docStyles";
 import { ALL_BULLET_IDS, ALL_NUMBER_IDS, BULLET_CHARS, levelType } from "./listFormats";
 import { cleanListType } from "../../editor/ListTypes";
 import {
-  AlignmentType, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
+  AlignmentType, HeightRule, HorizontalPositionRelativeFrom, TextWrappingSide, TextWrappingType, VerticalPositionRelativeFrom, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
   PageBreak as DocxPageBreak, ShadingType, Table, TableCell, TableRow, TextRun, WidthType, type ParagraphChild,
 } from "docx";
 import { pageDimensions } from "../../state/types";
@@ -106,7 +107,17 @@ function imageRun(ctx: Ctx, n: PM): ImageRun | null {
   let w = +(n.attrs?.width ?? natural.w);
   let h = +(n.attrs?.height ?? natural.h);
   if (w > MAX_IMAGE_WIDTH_PX) { h = (h * MAX_IMAGE_WIDTH_PX) / w; w = MAX_IMAGE_WIDTH_PX; }
-  return new ImageRun({ type, data: data.bytes, transformation: { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) }, altText: { name: "image", description: String(n.attrs?.alt ?? ""), title: "image" } });
+  const wrap = String(n.attrs?.wrap ?? "inline");
+  const rotation = Number(n.attrs?.rotation) || 0;
+  const emu = (px: number) => Math.round(px * 9525);
+  const x = Number(n.attrs?.x) || 0, y = Number(n.attrs?.y) || 0;
+  const floating =
+    wrap === "front" || wrap === "behind"
+      ? { horizontalPosition: { relative: HorizontalPositionRelativeFrom.PAGE, offset: emu(x) }, verticalPosition: { relative: VerticalPositionRelativeFrom.PAGE, offset: emu(y) }, behindDocument: wrap === "behind", allowOverlap: true, zIndex: 251658240 + (Number(n.attrs?.z) || 0) + 50, wrap: { type: TextWrappingType.NONE } }
+      : wrap === "square"
+        ? { horizontalPosition: { relative: HorizontalPositionRelativeFrom.COLUMN, offset: emu(x) }, verticalPosition: { relative: VerticalPositionRelativeFrom.PARAGRAPH, offset: emu(y) }, allowOverlap: false, wrap: { type: TextWrappingType.SQUARE, side: TextWrappingSide.BOTH_SIDES } }
+        : undefined;
+  return new ImageRun({ type, data: data.bytes, transformation: { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)), ...(rotation ? { rotation } : {}) }, ...(floating ? { floating } : {}), altText: { name: "image", description: String(n.attrs?.alt ?? ""), title: "image" } });
 }
 
 type ListCtx = { ref: string; level: number; instance: number } | null;
@@ -201,6 +212,8 @@ function table(ctx: Ctx, n: PM): Table {
         let col = 0;
         return new TableRow({
           tableHeader: row.content?.every((c) => c.type === "tableHeader") || undefined,
+          // A dragged row height is a minimum: the row still grows with its content.
+          ...(cleanRowHeight(row.attrs?.rowHeight) ? { height: { value: Math.round(cleanRowHeight(row.attrs?.rowHeight)! * TWIPS_PER_PX), rule: HeightRule.ATLEAST } } : {}),
           children: (row.content ?? []).map((cell) => {
             const span = +(cell.attrs?.colspan ?? 1);
             const c0 = col;
