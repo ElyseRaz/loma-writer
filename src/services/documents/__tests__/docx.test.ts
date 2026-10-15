@@ -73,13 +73,16 @@ describe("DOCX", () => {
     expect(warnings.join("\n")).toMatch(/Notes de bas de page/);
   });
 
-  it("warns when the paper size is not representable and keeps odd margins exactly", async () => {
+  it("reads a non-standard paper size as a custom size and keeps odd margins exactly", async () => {
     const { bytes } = await exportDocx(richModel());
     const zip = await JSZip.loadAsync(bytes);
     const xml = await zip.file("word/document.xml")!.async("string");
     zip.file("word/document.xml", xml.replace(/<w:pgSz[^>]*\/>/, '<w:pgSz w:w="9000" w:h="13000"/>').replace(/<w:pgMar[^>]*\/>/, '<w:pgMar w:top="2400" w:left="2400" w:right="2400" w:bottom="2400"/>'));
     const { warnings, model } = await importDocx(await zip.generateAsync({ type: "uint8array" }));
-    expect(warnings.join("\n")).toMatch(/Format de page/);
+    expect(warnings.join("\n")).not.toMatch(/Format de page/);
+    expect(model.page.size).toBe("Custom");
+    expect(model.page.customSizeCm?.width).toBeCloseTo(15.88, 1);
+    expect(model.page.customSizeCm?.height).toBeCloseTo(22.93, 1);
     expect(model.page.margins).toBe("custom"); // margins are kept exactly, never rounded
   });
 

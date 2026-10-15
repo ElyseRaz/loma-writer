@@ -5,10 +5,11 @@ import { AppStoreProvider, useApp } from "./state/store";
 import { Backstage } from "./components/backstage/Backstage";
 import { CommandPalette } from "./components/dialogs/CommandPalette";
 import { HeaderFooterDialog } from "./components/dialogs/HeaderFooterDialog";
+import { PageSetupDialog } from "./components/dialogs/PageSetupDialog";
 import { StyleDialog } from "./components/dialogs/StyleDialog";
 import { TableSizeDialog } from "./components/dialogs/TableSizeDialog";
 import { BookmarkDialog, ChartDialog, CoverPageDialog, CrossRefDialog, EquationDialog, IconsDialog } from "./components/dialogs/InsertDialogs";
-import { AboutDialog, ImportReportDialog, MarginsDialog, LinkDialog, LossySaveDialog, PreferencesDialog, UnsavedDialog, WordCountDialog } from "./components/dialogs/Dialogs";
+import { AboutDialog, ImportReportDialog, LinkDialog, LossySaveDialog, PreferencesDialog, UnsavedDialog, WordCountDialog } from "./components/dialogs/Dialogs";
 import { FindBar } from "./components/layout/FindBar";
 import { DocumentCanvas } from "./components/layout/DocumentCanvas";
 import { NavigationPane } from "./components/layout/NavigationPane";
@@ -47,7 +48,7 @@ function Shell() {
       {state.dialog === "headerFooter" && <HeaderFooterDialog />}
       {state.dialog === "styles" && <StyleDialog />}
       {state.dialog === "tableSize" && <TableSizeDialog />}
-      {state.dialog === "margins" && <MarginsDialog />}
+      {(state.dialog === "margins" || state.dialog === "paper") && <PageSetupDialog key={state.dialog} initialTab={state.dialog === "paper" ? "paper" : "margins"} />}
       {state.dialog === "importReport" && <ImportReportDialog />}
       {state.dialog === "lossySave" && <LossySaveDialog />}
       {state.dialog === "palette" && <CommandPalette />}

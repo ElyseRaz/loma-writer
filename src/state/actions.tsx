@@ -1,3 +1,4 @@
+import { sanitizePage } from "../services/documents/sanitize";
 import { cleanStyles } from "../editor/docStyles";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { Editor } from "@tiptap/react";
@@ -243,7 +244,7 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
       const draft = JSON.parse(raw) as { title: string; path: string | null; format?: string; lossy?: string[]; page?: Partial<PageSetup>; headerFooter?: HeaderFooterSettings; docStyles?: unknown; content: object };
       loadContent(editor, draft.content);
       const format = (draft.format as DocFormat | undefined) ?? (draft.path ? formatFromPath(draft.path) : null) ?? DEFAULT_FORMAT;
-      set({ doc: { title: draft.title, path: draft.path, dirty: true, format, lossy: draft.lossy ?? [] }, page: { ...DEFAULT_PAGE, ...draft.page }, headerFooter: sanitizeHeaderFooter(draft.headerFooter), docStyles: cleanStyles(draft.docStyles), view: "editor" });
+      set({ doc: { title: draft.title, path: draft.path, dirty: true, format, lossy: draft.lossy ?? [] }, page: sanitizePage(draft.page), headerFooter: sanitizeHeaderFooter(draft.headerFooter), docStyles: cleanStyles(draft.docStyles), view: "editor" });
       notify("Brouillon non enregistré restauré.");
     } catch {
       localStorage.removeItem(DRAFT_KEY);

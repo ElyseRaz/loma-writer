@@ -7,7 +7,7 @@ export const UNTITLED = "Document sans titre";
 
 const defaultPrefs: Preferences = { fontFamily: "Inter", fontSizePt: 11, autosave: true };
 
-type Persisted = Pick<AppState, "theme" | "prefs" | "ruler" | "navPane">;
+type Persisted = Pick<AppState, "theme" | "prefs" | "ruler" | "navPane" | "textBounds">;
 
 function loadPersisted(): Partial<Persisted> {
   try {
@@ -29,6 +29,7 @@ function initialState(): AppState {
     ruler: saved.ruler ?? true,
     marks: false,
     bookmarks: true,
+    textBounds: saved.textBounds ?? true,
     spellcheck: true,
     page: DEFAULT_PAGE,
     headerFooter: emptyHeaderFooter(),
@@ -73,13 +74,13 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
   // Persist user settings.
   useEffect(() => {
-    const data: Persisted = { theme: state.theme, prefs: state.prefs, ruler: state.ruler, navPane: state.navPane };
+    const data: Persisted = { theme: state.theme, prefs: state.prefs, ruler: state.ruler, navPane: state.navPane, textBounds: state.textBounds };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch {
       /* storage unavailable: settings are simply not remembered */
     }
-  }, [state.theme, state.prefs, state.ruler, state.navPane]);
+  }, [state.theme, state.prefs, state.ruler, state.navPane, state.textBounds]);
 
   // Resolve the theme (including "system") onto <html data-theme>.
   useEffect(() => {

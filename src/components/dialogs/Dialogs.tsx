@@ -7,8 +7,7 @@ import { useLomaEditor } from "../../editor/EditorProvider";
 import { useEditorSnapshot } from "../../editor/useEditorSnapshot";
 import { useActions } from "../../state/actions";
 import { THEME_LABELS, useApp } from "../../state/store";
-import { marginsPx, pageDimensions, type ThemeMode } from "../../state/types";
-import { pxToCm } from "../../services/documents/page";
+import type { ThemeMode } from "../../state/types";
 import { Button, Dialog, Kbd, Switch } from "../ui/Dialog";
 
 // ---------- Préférences ----------
@@ -301,36 +300,3 @@ export function LossySaveDialog() {
 }
 
 // ---------- Marges personnalisées ----------
-export function MarginsDialog() {
-  const { state, set } = useApp();
-  const current = marginsPx(state.page);
-  const [cm, setCm] = useState({ top: pxToCm(current.top), right: pxToCm(current.right), bottom: pxToCm(current.bottom), left: pxToCm(current.left) });
-  const { w, h } = pageDimensions(state.page);
-  const close = () => set({ dialog: null });
-  const field = (k: keyof typeof cm) => (
-    <label key={k} className="text-[11px] font-medium uppercase tracking-wide text-muted">
-      {{ top: "Haut", bottom: "Bas", left: "Gauche", right: "Droite" }[k]}
-      <div className="relative mt-1">
-        <input type="number" min={0} max={10} step={0.1} value={cm[k]} onChange={(e) => setCm({ ...cm, [k]: e.target.valueAsNumber })}
-          className="h-8 w-full rounded-md border border-line bg-surface px-2 pr-8 text-[13px] normal-case tracking-normal text-fg outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
-        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] normal-case text-muted">cm</span>
-      </div>
-    </label>
-  );
-  const valid = Object.values(cm).every((v) => Number.isFinite(v) && v >= 0 && v <= 10);
-  // The text area must keep a usable size.
-  const textW = pxToCm(w) - cm.left - cm.right;
-  const textH = pxToCm(h) - cm.top - cm.bottom;
-  const usable = valid && textW >= 3 && textH >= 3;
-  const apply = () => {
-    set((s) => ({ page: { ...s.page, margins: "custom", customMarginsCm: { ...cm } }, doc: { ...s.doc, dirty: true }, dialog: null }));
-  };
-  return (
-    <Dialog title="Marges personnalisées" icon={Settings} onClose={close} width={420} footer={<><Button onClick={close}>Annuler</Button><Button variant="primary" disabled={!usable} onClick={apply}>Appliquer</Button></>}>
-      <div className="grid grid-cols-2 gap-3 p-5">
-        {(["top", "bottom", "left", "right"] as const).map(field)}
-        {!usable && <p role="alert" className="col-span-2 text-[12px] text-danger">{valid ? "La zone de texte doit mesurer au moins 3 cm de large et de haut." : "Chaque marge doit être comprise entre 0 et 10 cm."}</p>}
-      </div>
-    </Dialog>
-  );
-}

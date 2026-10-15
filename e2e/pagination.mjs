@@ -69,7 +69,7 @@ await page.getByRole("menuitem", { name: /Larges/ }).click();
 const wide = await audited();
 ok(wide.pages > base && wide.problems.length === 0, `wide margins: more pages (${wide.pages} > ${base})`, wide.problems.slice(0, 2).join(" | "));
 await page.getByRole("button", { name: "Marges" }).click();
-await page.getByRole("menuitem", { name: /Personnalisées/ }).click();
+await page.getByRole("menuitem", { name: /personnalisées/i }).click();
 await page.getByLabel("Haut").fill("6");
 await page.getByLabel("Bas").fill("6");
 await page.getByRole("button", { name: "Appliquer" }).click();

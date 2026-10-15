@@ -657,7 +657,7 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
     const h = px(props.getAttribute("fo:page-height"));
     const side = (name: string) => px(props.getAttribute(name)) ?? 96;
     if (w && h) {
-      page = pageFromDimensions(w, h, { top: side("fo:margin-top"), right: side("fo:margin-right"), bottom: side("fo:margin-bottom"), left: side("fo:margin-left") }, ctx.warnings);
+      page = pageFromDimensions(w, h, { top: side("fo:margin-top"), right: side("fo:margin-right"), bottom: side("fo:margin-bottom"), left: side("fo:margin-left") }, ctx.warnings, { mirrored: layout?.getAttribute("style:page-usage") === "mirrored" });
       pageW = w;
       margins = { top: side("fo:margin-top"), left: side("fo:margin-left"), right: side("fo:margin-right") };
     }

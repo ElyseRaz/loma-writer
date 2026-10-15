@@ -62,3 +62,23 @@ Le zoom est un `transform: scale()` : la mise en page logique est identique à 2
 | Automatisé, navigateur réel | `npm run dev` puis `npm run test:e2e` (Chrome) | mise en page réelle : chaque caractère dans une page, texte intact, marges/format/orientation, zoom, frappe, suppression, annulation, saut manuel, tableau, images, listes |
 | Automatisé, WebKitGTK natif | `e2e/native.js` injecté dans `index.html` (voir `e2e/README.md`) | mêmes contrôles dans la vraie fenêtre Tauri, plus correspondance clic/caractère à 25 %, 100 %, 300 % |
 | **Manuel** | — | impression/PDF, sensation de fluidité du défilement, saisie au clavier réelle (les tests natifs utilisent `execCommand`) |
+
+## Mise en page : papier, marges, orientation
+
+Modèle unique : `PageSetup` (`src/state/types.ts`), calculs dans `src/state/page.ts` (centimètres pour l'utilisateur, px CSS à 96 dpi
+pour le moteur). Il fait partie du **document** (`DocumentModel.page`), pas des préférences globales ; il est enregistré avec lui
+(DOCX, ODT, DOC via LibreOffice, `.loma`) et dans le brouillon automatique. `pageGeometry()` en tire la zone de texte : le moteur de
+pagination mesure alors le texte réellement reformaté dans cette largeur et recalcule les sauts de page, sans toucher au contenu.
+
+- **Papiers** : A0–A6, B5, Letter, Legal, Executive, Tabloid (dimensions en portrait) et « Personnalisé » (5 à 120 cm).
+- **Marges** : Normales, Étroites, Modérées, Larges, Miroir, personnalisées (0 à 50 cm), plus marge de reliure (gauche ou haut).
+  `validatePage()` refuse les valeurs négatives ou qui laissent moins de 3 cm de texte ; un changement de papier ou d'orientation
+  réduit les marges qui ne tiennent plus (`fitMargins`).
+- **DOCX** : `w:pgSz` / `w:pgMar` (dont `w:gutter`), `w:mirrorMargins` dans `settings.xml` ; relus à l'ouverture. Une reliure en haut est
+  ajoutée à la marge haute (la bibliothèque n'écrit que la reliure gauche).
+- **ODT** : dimensions exactes en cm, `style:page-usage="mirrored"` ; ODF n'a pas de marge de reliure : elle est ajoutée à la marge concernée.
+- **Papier inconnu à l'import** : lu comme « Personnalisé » avec ses dimensions exactes (plus de remplacement par A4).
+- **Limites** : marges en miroir — l'éditeur affiche toutes les pages avec la marge intérieure à gauche (l'alternance recto verso est
+  écrite dans le fichier et appliquée par Word/LibreOffice) ; une seule section, donc une seule orientation par document (l'architecture
+  `PageSetup` peut devenir par section, mais rien n'est simulé) ; `.doc` passe par la conversion de LibreOffice.
+- **Affichage** : repères d'angle de la zone de texte (Affichage > Limites du texte), non imprimés.

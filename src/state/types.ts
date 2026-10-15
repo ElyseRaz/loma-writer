@@ -4,9 +4,9 @@ import type { DocFormat } from "../services/documents/types";
 
 export type ThemeMode = "light" | "dark" | "system";
 export type RibbonTabId = "home" | "insert" | "layout" | "references" | "review" | "view";
-export type PageSize = "A4" | "A5" | "Letter";
+export type PageSize = "A0" | "A1" | "A2" | "A3" | "A4" | "A5" | "A6" | "B5" | "Letter" | "Legal" | "Executive" | "Tabloid" | "Custom";
 export type Orientation = "portrait" | "landscape";
-export type MarginPreset = "normal" | "narrow" | "wide";
+export type MarginPreset = "normal" | "narrow" | "moderate" | "wide" | "mirrored";
 
 /** Page margins in centimetres, used when no preset matches. */
 export interface MarginsCm {
@@ -20,8 +20,15 @@ export interface PageSetup {
   size: PageSize;
   orientation: Orientation;
   margins: MarginPreset | "custom";
-  /** Only meaningful when `margins` is "custom". */
+  /** Only meaningful when `margins` is "custom". `left` and `right` are the inner and outer margins when the margins are mirrored. */
   customMarginsCm?: MarginsCm;
+  /** Width and height in centimetres (portrait) when `size` is "Custom". */
+  customSizeCm?: { width: number; height: number };
+  /** Facing pages: the left margin is the inner one (kept by the file, applied by Word/LibreOffice when printing). */
+  mirrored?: boolean;
+  /** Binding margin, added on the left (or at the top) of every page. */
+  gutterCm?: number;
+  gutterPos?: "left" | "top";
 }
 
 export interface Preferences {
@@ -47,7 +54,7 @@ export interface DocumentMeta {
   lossy: string[];
 }
 
-export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | null;
+export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | null;
 
 export interface AppState {
   theme: ThemeMode;
@@ -60,6 +67,8 @@ export interface AppState {
   marks: boolean;
   /** Show the flags of bookmarks in the text. */
   bookmarks: boolean;
+  /** Corner marks showing where the text area of each page starts. */
+  textBounds: boolean;
   spellcheck: boolean;
   page: PageSetup;
   headerFooter: HeaderFooterSettings;
@@ -89,27 +98,4 @@ export interface AppState {
 
 export const DEFAULT_PAGE: PageSetup = { size: "A4", orientation: "portrait", margins: "normal" };
 
-export const PAGE_PX: Record<PageSize, { w: number; h: number }> = {
-  A4: { w: 794, h: 1123 },
-  A5: { w: 559, h: 794 },
-  Letter: { w: 816, h: 1056 },
-};
-export const MARGIN_PX: Record<MarginPreset, number> = { normal: 96, narrow: 48, wide: 144 };
-
-const PX_PER_CM = 96 / 2.54;
-export const cmToPx = (cm: number) => cm * PX_PER_CM;
-
-/** Margins of a page in CSS px (96 dpi), whether preset or custom. */
-export function marginsPx(p: PageSetup): { top: number; right: number; bottom: number; left: number } {
-  if (p.margins === "custom" && p.customMarginsCm) {
-    const m = p.customMarginsCm;
-    return { top: cmToPx(m.top), right: cmToPx(m.right), bottom: cmToPx(m.bottom), left: cmToPx(m.left) };
-  }
-  const px = MARGIN_PX[p.margins === "custom" ? "normal" : p.margins];
-  return { top: px, right: px, bottom: px, left: px };
-}
-
-export function pageDimensions(p: PageSetup) {
-  const base = PAGE_PX[p.size];
-  return p.orientation === "portrait" ? base : { w: base.h, h: base.w };
-}
+export { PAGE_PX, MARGIN_PX, cmToPx, marginsPx, pageDimensions } from "./page";

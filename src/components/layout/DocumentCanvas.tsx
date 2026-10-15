@@ -131,7 +131,7 @@ export function DocumentCanvas() {
       <div className="flex w-max min-w-full justify-center px-8 py-6">
         <div className="page-wrap relative shrink-0" style={{ width: geometry.width * scale, height: Math.max(stackHeight, contentHeight) * scale }}>
         <div ref={stackRef} className="page-stack absolute left-0 top-0 origin-top-left" style={{ width: geometry.width, minHeight: stackHeight, transform: `scale(${scale})`, ["--doc-font" as string]: state.prefs.fontFamily, ["--doc-size" as string]: `${state.prefs.fontSizePt}pt` }} data-pages={total} data-pitch={geometry.pitch} data-inset-left={geometry.insetLeft} data-inset-top={geometry.insetTop}>
-          <PageSheets pages={total} geometry={geometry} section={section} onHeights={(h) => setHf((cur) => (cur.header === h.header && cur.footer === h.footer ? cur : h))} />
+          <PageSheets bounds={state.textBounds} pages={total} geometry={geometry} section={section} onHeights={(h) => setHf((cur) => (cur.header === h.header && cur.footer === h.footer ? cur : h))} />
           <div
             className={`paper relative${state.marks ? " show-marks" : ""}${state.bookmarks ? "" : " hide-bookmarks"}${painter ? " painter-armed" : ""}`}
             onMouseUp={onMouseUp}

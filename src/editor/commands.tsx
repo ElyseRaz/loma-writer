@@ -177,6 +177,7 @@ export function CommandsProvider({ children }: { children: ReactNode }) {
     add({ id: "view.zoom100", label: "Zoom 100 %", icon: Eye, shortcut: "Ctrl+0", global: true, group: "Affichage", run: () => setZoom(100) });
     add({ id: "view.nav", label: "Volet de navigation", icon: PanelLeft, group: "Affichage", active: state.navPane, run: () => set((s) => ({ navPane: !s.navPane })) });
     add({ id: "view.bookmarks", label: "Signets", icon: Bookmark, group: "Affichage", active: state.bookmarks, run: () => set((s) => ({ bookmarks: !s.bookmarks })) });
+    add({ id: "view.bounds", label: "Limites du texte", icon: Ruler, group: "Affichage", active: state.textBounds, run: () => set((s) => ({ textBounds: !s.textBounds })) });
     add({ id: "view.ruler", label: "Règle", icon: Ruler, group: "Affichage", active: state.ruler, run: () => set((s) => ({ ruler: !s.ruler })) });
     add({ id: "view.themeLight", label: "Thème clair", icon: Sun, group: "Affichage", active: state.theme === "light", run: () => set({ theme: "light" }) });
     add({ id: "view.themeDark", label: "Thème sombre", icon: Moon, group: "Affichage", active: state.theme === "dark", run: () => set({ theme: "dark" }) });
@@ -187,7 +188,7 @@ export function CommandsProvider({ children }: { children: ReactNode }) {
     add({ id: "review.wordCount", label: "Statistiques du document", icon: Hash, group: "Révision", run: () => set({ dialog: "wordCount" }) });
 
     return Object.fromEntries(list.map((c) => [c.id, c]));
-  }, [editor, snap, state.painter, state.zoom, state.marks, state.navPane, state.ruler, state.bookmarks, state.theme, state.spellcheck, state.prefs.fontSizePt, actions, set, notify]);
+  }, [editor, snap, state.painter, state.zoom, state.marks, state.navPane, state.ruler, state.textBounds, state.bookmarks, state.theme, state.spellcheck, state.prefs.fontSizePt, actions, set, notify]);
 
   // Global keyboard shortcuts (the ones TipTap does not already own).
   const commandsRef = useRef(commands);

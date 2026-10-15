@@ -356,3 +356,8 @@ select {
 .paper .ProseMirror .column-resize-handle { position: absolute; top: -1px; bottom: -1px; right: -2px; width: 4px; background: #2563eb; pointer-events: none; z-index: 5; }
 .paper .ProseMirror.resize-cursor { cursor: col-resize; }
 .paper .ProseMirror .tableWrapper { position: relative; }
+
+/* Text-area corner marks: a guide while editing, never printed. */
+.page-bound { color: #b6bfcc; }
+.dark .page-bound, [data-theme="dark"] .page-bound { color: #6b7280; }
+@media print { [data-bounds] { display: none !important; } }

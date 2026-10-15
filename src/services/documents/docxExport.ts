@@ -7,7 +7,8 @@ import {
   AlignmentType, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
   PageBreak as DocxPageBreak, ShadingType, Table, TableCell, TableRow, TextRun, WidthType, type ParagraphChild,
 } from "docx";
-import { marginsPx, pageDimensions } from "../../state/types";
+import { pageDimensions } from "../../state/types";
+import { baseMarginsCm, cmToPx, gutterOf, isMirrored } from "../../state/page";
 import { imageSize, parseDataUri } from "./xml";
 import type { PM, Mark } from "./pm";
 import { RawXml } from "./docxPost";
@@ -255,12 +256,29 @@ function wrappers(set: HeaderFooterSet, make: (c: HeaderFooterContent) => Header
   return out;
 }
 
+/** `w:mirrorMargins` (facing pages) is a document setting the docx library does not write. */
+async function addMirrorMargins(bytes: Uint8Array): Promise<Uint8Array> {
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(bytes);
+  const file = zip.file("word/settings.xml");
+  if (!file) return bytes;
+  const xml = await file.async("string");
+  if (xml.includes("w:mirrorMargins")) return bytes;
+  // Schema order: after w:zoom (and before the compatibility settings).
+  const patched = /<w:zoom[^>]*\/>/.test(xml) ? xml.replace(/(<w:zoom[^>]*\/>)/, "$1<w:mirrorMargins/>") : xml.replace(/(<w:settings[^>]*>)/, "$1<w:mirrorMargins/>");
+  zip.file("word/settings.xml", patched);
+  return zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+}
+
 export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
   const ctx: Ctx = { warnings: new Set(), raw: new RawXml(), shapeId: 1000, orderedInstances: 0, defaults: model.defaults ?? { fontFamily: "Calibri", fontSizePt: 11 } };
   const children = blocks(ctx, model.content.content);
   const { w, h } = pageDimensions({ ...model.page, orientation: "portrait" });
-  const m = marginsPx(model.page);
+  const base = baseMarginsCm(model.page);
+  const gutter = gutterOf(model.page);
   const twips = (px: number) => Math.round(px * TWIPS_PER_PX);
+  // A binding margin at the top is folded into the top margin (the docx library only writes the left one).
+  const m = { top: cmToPx(base.top + (gutter.pos === "top" ? gutter.cm : 0)), bottom: cmToPx(base.bottom), left: cmToPx(base.left), right: cmToPx(base.right) };
 
   // The editable styles are written in full, so other editors show what Loma Writer shows.
   const def = ctx.defaults.fontFamily;
@@ -296,13 +314,14 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
           ...(model.headerFooter?.titlePage ? { titlePage: true } : {}),
           page: {
             size: { width: w * TWIPS_PER_PX, height: h * TWIPS_PER_PX, orientation: model.page.orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
-            margin: { top: twips(m.top), bottom: twips(m.bottom), left: twips(m.left), right: twips(m.right) },
+            margin: { top: twips(m.top), bottom: twips(m.bottom), left: twips(m.left), right: twips(m.right), ...(gutter.cm && gutter.pos === "left" ? { gutter: twips(cmToPx(gutter.cm)) } : {}) },
           },
         },
         children: children.length ? children : [new Paragraph("")],
       },
     ],
   });
-  const bytes = await ctx.raw.apply(new Uint8Array(await Packer.toArrayBuffer(doc)));
+  let bytes = await ctx.raw.apply(new Uint8Array(await Packer.toArrayBuffer(doc)));
+  if (isMirrored(model.page)) bytes = await addMirrorMargins(bytes);
   return { bytes, warnings: [...ctx.warnings] };
 }

@@ -58,6 +58,7 @@ export function ViewTab() {
       <RibbonGroup label="Afficher">
         <RibbonStack>
           <CommandButton id="view.ruler" size="sm" label="Règle" className="w-[120px] justify-start" />
+          <CommandButton id="view.bounds" size="sm" label="Limites du texte" className="w-[120px] justify-start" />
           <CommandButton id="view.nav" size="sm" label="Volet de navigation" className="w-[120px] justify-start" />
           <CommandButton id="para.marks" size="sm" label="Marques ¶" className="w-[120px] justify-start" />
         </RibbonStack>

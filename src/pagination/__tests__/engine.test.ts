@@ -130,7 +130,8 @@ describe("pagination engine", () => {
     const a5 = paginate(atoms, pageGeometry({ ...DEFAULT_PAGE, size: "A5" })).pages;
     expect(landscape).toBeGreaterThan(portrait);
     expect(narrow).toBeLessThan(portrait);
-    expect(wide).toBeGreaterThan(portrait);
+    expect(wide).toBeGreaterThanOrEqual(portrait); // "Larges" widens the side margins only: the text gets narrower, not shorter
+    expect(pageGeometry({ ...DEFAULT_PAGE, margins: "wide" }).insetLeft).toBeGreaterThan(A4.insetLeft);
     expect(a5).toBeGreaterThan(portrait);
     const custom = pageGeometry({ ...DEFAULT_PAGE, margins: "custom", customMarginsCm: { top: 5, right: 2, bottom: 5, left: 2 } });
     expect(paginate(atoms, custom).pages).toBeGreaterThan(portrait);

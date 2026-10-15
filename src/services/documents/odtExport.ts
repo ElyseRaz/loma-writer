@@ -5,6 +5,7 @@ import { ALL_BULLET_IDS, ALL_NUMBER_IDS, BULLET_CHARS, levelType, NUMBER_FORMATS
 import { cleanListType } from "../../editor/ListTypes";
 import JSZip from "jszip";
 import { marginsPx, pageDimensions } from "../../state/types";
+import { effectiveMarginsCm, isMirrored, paperCm } from "../../state/page";
 import { pxToCm } from "./page";
 import type { PM, Mark } from "./pm";
 import { latexToMathml } from "../math/mathml";
@@ -373,9 +374,11 @@ function namedStyles(model: DocumentModel, hfXml: string, hfStyles: string, grad
   const hf = model.headerFooter;
   const font = esc(model.defaults?.fontFamily ?? "Liberation Serif");
   const size = model.defaults?.fontSizePt ?? 12;
-  const { w, h } = pageDimensions({ ...model.page, orientation: "portrait" });
-  const [pw, ph] = model.page.orientation === "landscape" ? [h, w] : [w, h];
-  const mg = marginsPx(model.page);
+  // Exact centimetres (not rounded through pixels). ODF has no binding margin: it is added to the margin it belongs to.
+  const paper = paperCm(model.page);
+  const [pw, ph] = model.page.orientation === "landscape" ? [paper.height, paper.width] : [paper.width, paper.height];
+  const mg = effectiveMarginsCm(model.page);
+  const usage = isMirrored(model.page) ? ' style:page-usage="mirrored"' : "";
   // Paragraph styles in full (the built-in look plus the user's edits), so other editors show the same.
   const look = (id: StyleId) => {
     const r = resolveStyle(id, model.styles ?? {}, { fontFamily: model.defaults?.fontFamily ?? "Liberation Serif", sizePt: size });
@@ -404,7 +407,7 @@ ${gradients}
 </office:styles>
 <office:automatic-styles>
 ${hfStyles}
-<style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="${pxToCm(pw)}cm" fo:page-height="${pxToCm(ph)}cm" style:print-orientation="${model.page.orientation}" fo:margin-top="${pxToCm(mg.top)}cm" fo:margin-bottom="${pxToCm(mg.bottom)}cm" fo:margin-left="${pxToCm(mg.left)}cm" fo:margin-right="${pxToCm(mg.right)}cm"/>${hf && hasContent(hf.header) ? '<style:header-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-bottom="0.3cm"/></style:header-style>' : ""}${hf && hasContent(hf.footer) ? '<style:footer-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-top="0.3cm"/></style:footer-style>' : ""}</style:page-layout>
+<style:page-layout style:name="pm1"${usage}><style:page-layout-properties fo:page-width="${+pw.toFixed(3)}cm" fo:page-height="${+ph.toFixed(3)}cm" style:print-orientation="${model.page.orientation}" fo:margin-top="${+mg.top.toFixed(3)}cm" fo:margin-bottom="${+mg.bottom.toFixed(3)}cm" fo:margin-left="${+mg.left.toFixed(3)}cm" fo:margin-right="${+mg.right.toFixed(3)}cm"/>${hf && hasContent(hf.header) ? '<style:header-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-bottom="0.3cm"/></style:header-style>' : ""}${hf && hasContent(hf.footer) ? '<style:footer-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-top="0.3cm"/></style:footer-style>' : ""}</style:page-layout>
 </office:automatic-styles>
 <office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">${hfXml}</style:master-page></office:master-styles>
 </office:document-styles>`;

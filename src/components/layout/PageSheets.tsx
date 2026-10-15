@@ -29,11 +29,25 @@ function Measure({ section, geometry, onHeights }: { section: SectionLayout; geo
   );
 }
 
+/** Corner marks at the corners of the text area (like Word's "Afficher les limites du texte"): they are not part of the document and are not printed. */
+function TextBounds({ geometry: g }: { geometry: PageGeometry }) {
+  const L = Math.min(14, g.insetLeft, g.insetTop);
+  const mark = (x: number, y: number, right: boolean, bottom: boolean) => (
+    <span
+      className="page-bound"
+      style={{ position: "absolute", left: right ? undefined : x, right: right ? g.width - x : undefined, top: bottom ? undefined : y, bottom: bottom ? g.height - y : undefined, width: L, height: L,
+        [right ? "borderRight" : "borderLeft"]: "1px solid", [bottom ? "borderBottom" : "borderTop"]: "1px solid" }}
+    />
+  );
+  const l = g.insetLeft, r = g.width - g.insetRight, t = g.insetTop, b = g.height - g.insetBottom;
+  return <div aria-hidden data-bounds className="pointer-events-none absolute inset-0">{mark(l, t, false, false)}{mark(r, t, true, false)}{mark(l, b, false, true)}{mark(r, b, true, true)}</div>;
+}
+
 /**
  * The white sheets drawn behind the text, one per page, `gap` apart, with their header and footer. The HTML
  * comes from the editor schema (never from raw user markup).
  */
-export function PageSheets({ pages, geometry, section, onHeights }: { pages: number; geometry: PageGeometry; section: SectionLayout; onHeights: (h: HeaderFooterHeights) => void }) {
+export function PageSheets({ pages, geometry, section, onHeights, bounds = true }: { pages: number; geometry: PageGeometry; section: SectionLayout; onHeights: (h: HeaderFooterHeights) => void; bounds?: boolean }) {
   return (
     <>
       <Measure section={section} geometry={geometry} onHeights={onHeights} />
@@ -47,6 +61,7 @@ export function PageSheets({ pages, geometry, section, onHeights }: { pages: num
             className="page-sheet absolute left-0"
             style={{ top: `calc(${i} * (${geometry.height}px + var(--pg-gap, ${geometry.gap}px)))`, width: geometry.width, height: geometry.height }}
           >
+            {bounds && <TextBounds geometry={geometry} />}
             {header && <div className="hf hf-body" style={{ top: 30, ...sideStyle(geometry) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(header.blocks), i + 1, pages) }} />}
             {footer && <div className="hf hf-body" style={{ bottom: 30, ...sideStyle(geometry) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(footer.blocks), i + 1, pages) }} />}
           </div>

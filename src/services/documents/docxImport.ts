@@ -731,7 +731,11 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   let h = +(sz?.getAttribute("w:h") ?? 16838) / 15;
   if (sz?.getAttribute("w:orient") === "landscape" && w < h) [w, h] = [h, w];
   const twip = (name: string) => +(mar?.getAttribute(name) ?? 1440) / 15;
-  const page = pageFromDimensions(w, h, mar ? { top: twip("w:top"), right: twip("w:right"), bottom: twip("w:bottom"), left: twip("w:left") } : null, warnings);
+  const settings = await text("word/settings.xml");
+  const mirrored = !!settings && /<w:mirrorMargins\b(?![^>]*w:val="(?:0|false|off)")/.test(settings);
+  const gutterTop = !!settings && /<w:gutterAtTop\b(?![^>]*w:val="(?:0|false|off)")/.test(settings);
+  const gutterPx = mar ? +(mar.getAttribute("w:gutter") ?? 0) / 15 : 0;
+  const page = pageFromDimensions(w, h, mar ? { top: twip("w:top"), right: twip("w:right"), bottom: twip("w:bottom"), left: twip("w:left") } : null, warnings, { mirrored, gutterPx, gutterTop });
 
   resolvePlacements(blocks, w, { top: mar ? +(mar.getAttribute("w:top") ?? 1440) / 15 : 96, left: mar ? +(mar.getAttribute("w:left") ?? 1440) / 15 : 96, right: mar ? +(mar.getAttribute("w:right") ?? 1440) / 15 : 96 });
 
