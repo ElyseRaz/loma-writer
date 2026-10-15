@@ -217,6 +217,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // The window has no decorations: give it the application icon explicitly (taskbar, Alt+Tab).
+            if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
+                let _ = window.set_icon(tauri::include_image!("icons/icon.png"));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             read_text_file,
             write_text_file,
