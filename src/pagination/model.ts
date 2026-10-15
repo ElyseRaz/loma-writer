@@ -32,7 +32,7 @@ export function pageGeometry(page: PageSetup, header = 0, footer = 0, gap = PAGE
 }
 
 /** One unit the engine lays out: a text block, a table row, a rule or a manual page break. */
-export type AtomKind = "text" | "row" | "block" | "break";
+export type AtomKind = "text" | "row" | "block" | "break" | "section";
 
 export interface LineBox {
   top: number;
@@ -44,10 +44,16 @@ export interface Atom {
   /** Natural (unpaginated) vertical extent, relative to the top of the content area of page 1. */
   top: number;
   bottom: number;
-  /** Headings: must not be the last thing on a page. */
+  /** Headings and paragraphs set to "keep with next": must not be the last thing on a page. */
   keepWithNext?: boolean;
+  /** Starts a new page (paragraph option "Saut de page avant"). */
+  breakBefore?: boolean;
+  /** Never split across two pages (paragraph option "Lignes solidaires"). */
+  keepLines?: boolean;
   /** Table rows below a header row: height of the header rows repeated on top of a page this row starts. */
   repeat?: number;
+  /** Section breaks: index of the section that starts after this atom. */
+  section?: number;
   /** Text only: measures the line boxes (natural coordinates). Called lazily, only for atoms crossing a page end. */
   lines?: () => LineBox[];
 }
@@ -63,6 +69,22 @@ export interface PageBreak {
   repeat?: number;
 }
 
+/** One page sheet, in engine coordinates (0 = top of the text area of page 0). */
+export interface Sheet {
+  top: number;
+  /** Offset from the left of the stack (sheets narrower than the widest one are centred). */
+  left: number;
+  width: number;
+  height: number;
+  insetTop: number;
+  insetBottom: number;
+  insetLeft: number;
+  insetRight: number;
+  /** Section the page belongs to, and its index inside it (0 = first page of the section). */
+  section: number;
+  indexInSection: number;
+}
+
 export interface PaginationResult {
   breaks: PageBreak[];
   pages: number;
@@ -70,4 +92,5 @@ export interface PaginationResult {
   startPage: number[];
   /** Atoms taller than a whole page: they overflow instead of being cut. */
   oversize: number[];
+  sheets: Sheet[];
 }

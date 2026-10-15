@@ -4,11 +4,13 @@ import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { Editor } from "@tiptap/react";
 import { paginate } from "./engine";
 import { collectAtoms } from "./measure";
-import type { PageGeometry } from "./model";
+import type { PageGeometry, Sheet } from "./model";
 
 export interface PaginationState {
   decos: DecorationSet;
   pages: number;
+  /** Where each page sheet is (engine coordinates: 0 = top of the text area of page 0). */
+  sheets: Sheet[];
   /** Signature of the layout the decorations encode; recomputed from the live decorations so edits invalidate it. */
   signature: string;
 }
@@ -32,7 +34,10 @@ const MAX_WAIT = 220;
 export const paginationKey = new PluginKey<PaginationState>("loma-pagination");
 
 interface Storage {
+  /** Geometry of the first section (what single-section code reads). */
   geometry: PageGeometry | null;
+  /** One geometry per section. */
+  geometries: PageGeometry[];
   scale: number;
   dirty: boolean;
   /** Called after each layout, with the number of pages. */
@@ -42,11 +47,13 @@ interface Storage {
 const storageOf = (editor: Editor) => (editor.storage as unknown as { pagination: Storage }).pagination;
 
 /** Tells the engine about the current page geometry and zoom, and asks for a new layout when they change. */
-export function setPaginationInputs(editor: Editor, geometry: PageGeometry, scale: number) {
+export function setPaginationInputs(editor: Editor, geometry: PageGeometry | PageGeometry[], scale: number) {
   const s = storageOf(editor);
+  const geoms = Array.isArray(geometry) ? geometry : [geometry];
   // A new zoom re-runs the (cheap) verification: text snaps to device pixels differently at each zoom level.
-  const changed = JSON.stringify(s.geometry) !== JSON.stringify(geometry) || s.scale !== scale;
-  s.geometry = geometry;
+  const changed = JSON.stringify(s.geometries) !== JSON.stringify(geoms) || s.scale !== scale;
+  s.geometries = geoms;
+  s.geometry = geoms[0];
   s.scale = scale;
   if (changed) {
     s.dirty = true;
@@ -105,7 +112,7 @@ export const Pagination = Extension.create({
   name: "pagination",
 
   addStorage(): Storage {
-    return { geometry: null, scale: 1, dirty: false };
+    return { geometry: null, geometries: [], scale: 1, dirty: false };
   },
 
   addProseMirrorPlugins() {
@@ -114,16 +121,22 @@ export const Pagination = Extension.create({
       new Plugin<PaginationState>({
         key: paginationKey,
         state: {
-          init: () => ({ decos: DecorationSet.empty, pages: 1, signature: "" }),
+          init: () => ({ decos: DecorationSet.empty, pages: 1, sheets: [], signature: "" }),
           apply(tr, value) {
-            const meta = tr.getMeta(paginationKey) as { decos: DecorationSet; pages: number; signature: string } | undefined;
+            const meta = tr.getMeta(paginationKey) as { decos: DecorationSet; pages: number; sheets: Sheet[]; signature: string } | undefined;
             if (meta && "decos" in meta) return meta;
             if (!tr.docChanged) return value;
             const decos = value.decos.map(tr.mapping, tr.doc);
-            return { ...value, decos, signature: signatureOf(value.pages, decos) };
+            return { ...value, decos, signature: `${signatureOf(value.pages, decos)}|${value.signature.split("|").slice(2).join("|")}`.replace(/\|$/, "") };
           },
         },
-        props: { decorations: (state) => paginationKey.getState(state)?.decos },
+        props: {
+          decorations: (state) => {
+            const decos = paginationKey.getState(state)?.decos ?? DecorationSet.empty;
+            const margins = sectionMargins(state.doc, storage.geometries);
+            return margins ? decos.add(state.doc, margins) : decos;
+          },
+        },
         view(view) {
           let raf = 0;
           let verifyRaf = 0;
@@ -170,6 +183,25 @@ export const Pagination = Extension.create({
   },
 });
 
+/**
+ * Each top-level block gets the left and right margin of its section (CSS variables used by the stylesheet), so that sections
+ * of different paper sizes have text areas of different widths. Single-geometry documents use the same mechanism.
+ */
+function sectionMargins(doc: import("@tiptap/pm/model").Node, geoms: PageGeometry[]): Decoration[] | null {
+  if (!geoms.length) return null;
+  const maxWidth = Math.max(...geoms.map((g) => g.width));
+  const out: Decoration[] = [];
+  let section = 0;
+  doc.forEach((n, off) => {
+    if (n.type.name === "sectionBreak") section++;
+    const g = geoms[Math.min(section, geoms.length - 1)];
+    const left = (maxWidth - g.width) / 2 + g.insetLeft;
+    const right = (maxWidth - g.width) / 2 + g.insetRight;
+    out.push(Decoration.node(off, off + n.nodeSize, { style: `--sec-l:${+left.toFixed(2)}px;--sec-r:${+right.toFixed(2)}px` }));
+  });
+  return out;
+}
+
 function layout(view: EditorView, storage: Storage, done: () => void) {
   const geom = storage.geometry;
   if (!geom || view.isDestroyed || view.dom.getClientRects().length === 0) return; // not visible: redo when shown
@@ -184,7 +216,7 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
   try {
     const origin = view.dom.getBoundingClientRect().top;
     ({ atoms, refs } = collectAtoms(view, origin, scale));
-    result = paginate(atoms, geom);
+    result = paginate(atoms, storage.geometries.length ? storage.geometries : geom);
   } finally {
     view.dom.classList.remove("pg-measuring");
   }
@@ -229,10 +261,10 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
     ),
   ]);
   const decos = DecorationSet.create(view.state.doc, widgets);
-  const signature = signatureOf(result.pages, decos);
+  const signature = `${signatureOf(result.pages, decos)}|${JSON.stringify(result.sheets.map((s) => [Math.round(s.top * 10), s.width, s.height, s.section]))}`;
   const current = paginationKey.getState(view.state);
   if (current?.signature === signature && current.pages === result.pages) { window.dispatchEvent(new Event("loma:layout")); done(); return; }
-  view.dispatch(view.state.tr.setMeta(paginationKey, { decos, pages: result.pages, signature }).setMeta("addToHistory", false));
+  view.dispatch(view.state.tr.setMeta(paginationKey, { decos, pages: result.pages, sheets: result.sheets, signature }).setMeta("addToHistory", false));
   storage.onLayout?.(result.pages);
   window.dispatchEvent(new Event("loma:layout"));
   done();

@@ -1,3 +1,7 @@
+import { SECTION_BREAK } from "../../editor/Sections";
+import { sanitizePage } from "./sanitize";
+import { cleanWatermark, type Watermark } from "../../editor/watermark";
+import { cleanLayout } from "../../editor/ParagraphFormat";
 import { cleanRowHeight } from "../../editor/TableRowResize";
 import { cleanPlace } from "../../editor/TableLook";
 import { cellLook, cleanLook, tint, type Line } from "../../editor/tableStyles";
@@ -5,10 +9,10 @@ import { resolveStyle, type StyleId } from "../../editor/docStyles";
 import { ALL_BULLET_IDS, ALL_NUMBER_IDS, BULLET_CHARS, levelType } from "./listFormats";
 import { cleanListType } from "../../editor/ListTypes";
 import {
-  AlignmentType, HeightRule, HorizontalPositionRelativeFrom, TextWrappingSide, TextWrappingType, VerticalPositionRelativeFrom, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
+  AlignmentType, HeightRule, SectionType, HorizontalPositionRelativeFrom, TextWrappingSide, TextWrappingType, VerticalPositionRelativeFrom, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
   PageBreak as DocxPageBreak, ShadingType, Table, TableCell, TableRow, TextRun, WidthType, type ParagraphChild,
 } from "docx";
-import { pageDimensions } from "../../state/types";
+import { pageDimensions, type PageSetup } from "../../state/types";
 import { baseMarginsCm, cmToPx, gutterOf, isMirrored } from "../../state/page";
 import { imageSize, parseDataUri } from "./xml";
 import type { PM, Mark } from "./pm";
@@ -16,7 +20,7 @@ import { RawXml } from "./docxPost";
 import { groupRunXml, shapeRunXml } from "./docxShapes";
 import { latexToMathml, parseMathml } from "../math/mathml";
 import { mathmlElementToOmml } from "../math/omml";
-import { hasContent, type HeaderFooterContent, type HeaderFooterSet } from "../../pagination/headerFooter";
+import { hasContent, sanitizeHeaderFooter, type HeaderFooterContent, type HeaderFooterSet, type HeaderFooterSettings } from "../../pagination/headerFooter";
 import type { DocumentModel, ExportResult } from "./types";
 
 const TWIPS_PER_PX = 15;
@@ -120,10 +124,13 @@ function imageRun(ctx: Ctx, n: PM): ImageRun | null {
   return new ImageRun({ type, data: data.bytes, transformation: { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)), ...(rotation ? { rotation } : {}) }, ...(floating ? { floating } : {}), altText: { name: "image", description: String(n.attrs?.alt ?? ""), title: "image" } });
 }
 
+const cmTw = (cm: number) => Math.round(cm * 567);
+
 type ListCtx = { ref: string; level: number; instance: number } | null;
 
 function paragraphFor(ctx: Ctx, n: PM, extra: Record<string, unknown> = {}, list: ListCtx = null, lead: ParagraphChild[] = []): Paragraph {
   const line = lineHeightOf(n.content ?? []);
+  const L = cleanLayout(n.attrs as never);
   const shading = n.attrs?.shading ? { type: ShadingType.CLEAR, fill: hex(String(n.attrs.shading)), color: "auto" } : undefined;
   const b = n.attrs?.borders as { top?: boolean; right?: boolean; bottom?: boolean; left?: boolean } | null | undefined;
   const side = { style: BorderStyle.SINGLE, size: 6, color: "6B7280", space: 4 };
@@ -133,7 +140,12 @@ function paragraphFor(ctx: Ctx, n: PM, extra: Record<string, unknown> = {}, list
     ...(n.attrs?.textAlign && n.attrs.textAlign !== "left" ? { alignment: ALIGN[String(n.attrs.textAlign)] } : {}),
     ...(shading ? { shading } : {}),
     ...(border && Object.keys(border).length ? { border } : {}),
-    ...(line ? { spacing: { line, lineRule: "auto" as const } } : {}),
+    ...(line || L.spaceBefore !== null || L.spaceAfter !== null ? { spacing: { ...(line ? { line, lineRule: "auto" as const } : {}), ...(L.spaceBefore !== null ? { before: Math.round(L.spaceBefore * 20) } : {}), ...(L.spaceAfter !== null ? { after: Math.round(L.spaceAfter * 20) } : {}) } } : {}),
+    // Indents in a list come from the list's own numbering levels.
+    ...(!list && (L.indentLeft || L.indentRight || L.firstLine) ? { indent: { ...(L.indentLeft ? { left: cmTw(L.indentLeft) } : {}), ...(L.indentRight ? { right: cmTw(L.indentRight) } : {}), ...(L.firstLine > 0 ? { firstLine: cmTw(L.firstLine) } : L.firstLine < 0 ? { hanging: cmTw(-L.firstLine) } : {}) } } : {}),
+    ...(L.pageBreakBefore ? { pageBreakBefore: true } : {}),
+    ...(L.keepWithNext ? { keepNext: true } : {}),
+    ...(L.keepLines ? { keepLines: true } : {}),
     ...(n.type === "heading" ? { heading: HEADINGS[Math.min(3, Math.max(1, +(n.attrs?.level ?? 1))) - 1] } : {}),
     ...(list ? { numbering: { reference: list.ref, level: list.level, instance: list.instance } } : {}),
     ...extra,
@@ -269,6 +281,36 @@ function wrappers(set: HeaderFooterSet, make: (c: HeaderFooterContent) => Header
   return out;
 }
 
+/**
+ * The watermark is Word's own: a VML WordArt shape named PowerPlusWaterMarkObject in the first paragraph of every header
+ * (the docx library has no API for it, so it is added to the header parts after packing).
+ */
+async function addWatermark(bytes: Uint8Array, w: Watermark): Promise<Uint8Array> {
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(bytes);
+  // Word stretches the text to the shape: keep it within the text width, with the same proportions.
+  const natural = Math.max(60, Math.round(w.text.length * w.size * 0.6));
+  const fit = Math.min(1, 460 / natural);
+  const widthPt = Math.round(natural * fit);
+  const heightPt = Math.round(w.size * 1.1 * fit);
+  const style = (n: number) => `position:absolute;margin-left:0;margin-top:0;width:${widthPt}pt;height:${heightPt}pt;rotation:${w.layout === "diagonal" ? 315 : 0};z-index:-${251658240 + n};mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin`;
+  const shapeType = '<v:shapetype id="_x0000_t136" coordsize="21600,21600" o:spt="136" adj="10800" path="m@7,l@8,m@5,21600l@6,21600e"><v:formulas><v:f eqn="sum #0 0 10800"/><v:f eqn="prod #0 2 1"/><v:f eqn="sum 21600 0 @1"/><v:f eqn="sum 0 0 @2"/><v:f eqn="sum 21600 0 @3"/><v:f eqn="if @0 @3 0"/><v:f eqn="if @0 21600 @1"/><v:f eqn="if @0 0 @2"/><v:f eqn="if @0 @4 21600"/><v:f eqn="mid @5 @6"/><v:f eqn="mid @8 @5"/><v:f eqn="mid @7 @8"/><v:f eqn="mid @6 @7"/><v:f eqn="sum @6 0 @5"/></v:formulas><v:path textpathok="t" o:connecttype="custom" o:connectlocs="@9,0;@10,10800;@11,21600;@12,10800" o:connectangles="270,180,90,0"/><v:textpath on="t" fitshape="t"/><v:handles><v:h position="#0,bottomRight" xrange="6629,14971"/></v:handles><o:lock v:ext="edit" text="t" shapetype="t"/></v:shapetype>';
+  let n = 0;
+  for (const name of Object.keys(zip.files).filter((f) => /^word\/header\d*\.xml$/.test(f))) {
+    let xml = await zip.file(name)!.async("string");
+    if (xml.includes("PowerPlusWaterMarkObject")) continue;
+    n++;
+    const text = w.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+    const run = `<w:r><w:rPr><w:noProof/></w:rPr><w:pict>${shapeType}<v:shape id="PowerPlusWaterMarkObject${n}" o:spid="_x0000_s${2048 + n}" type="#_x0000_t136" alt="loma-size:${w.size}" style="${style(n)}" o:allowincell="f" fillcolor="${w.color}" stroked="f"><v:fill opacity="${w.opacity}"/><v:textpath style="font-family:&quot;Calibri&quot;;font-size:1pt;font-weight:bold" string="${text}"/><w10:wrap anchorx="margin" anchory="margin"/></v:shape></w:pict></w:r>`;
+    // Into the first paragraph (after its properties) so the header does not grow.
+    const patched = xml.replace(/(<w:p(?: [^>]*)?>)(<w:pPr>[\s\S]*?<\/w:pPr>)?/, (_m, open, props) => `${open}${props ?? ""}${run}`);
+    // The VML namespaces must be declared on the root.
+    xml = patched.replace(/<w:hdr([^>]*)>/, (_m, attrs: string) => `<w:hdr${["xmlns:v=\"urn:schemas-microsoft-com:vml\"", "xmlns:o=\"urn:schemas-microsoft-com:office:office\"", "xmlns:w10=\"urn:schemas-microsoft-com:office:word\""].filter((d) => !attrs.includes(d.split("=")[0])).map((d) => " " + d).join("")}${attrs}>`);
+    zip.file(name, xml);
+  }
+  return n ? zip.generateAsync({ type: "uint8array", compression: "DEFLATE" }) : bytes;
+}
+
 /** `w:mirrorMargins` (facing pages) is a document setting the docx library does not write. */
 async function addMirrorMargins(bytes: Uint8Array): Promise<Uint8Array> {
   const JSZip = (await import("jszip")).default;
@@ -285,13 +327,27 @@ async function addMirrorMargins(bytes: Uint8Array): Promise<Uint8Array> {
 
 export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
   const ctx: Ctx = { warnings: new Set(), raw: new RawXml(), shapeId: 1000, orderedInstances: 0, defaults: model.defaults ?? { fontFamily: "Calibri", fontSizePt: 11 } };
-  const children = blocks(ctx, model.content.content);
-  const { w, h } = pageDimensions({ ...model.page, orientation: "portrait" });
-  const base = baseMarginsCm(model.page);
-  const gutter = gutterOf(model.page);
+  const wm0 = cleanWatermark(model.watermark);
   const twips = (px: number) => Math.round(px * TWIPS_PER_PX);
-  // A binding margin at the top is folded into the top margin (the docx library only writes the left one).
-  const m = { top: cmToPx(base.top + (gutter.pos === "top" ? gutter.cm : 0)), bottom: cmToPx(base.bottom), left: cmToPx(base.left), right: cmToPx(base.right) };
+  /** Paper, margins and orientation of a section (`w:pgSz`, `w:pgMar`). */
+  const pageProps = (page: PageSetup) => {
+    const { w, h } = pageDimensions({ ...page, orientation: "portrait" });
+    const base = baseMarginsCm(page);
+    const gutter = gutterOf(page);
+    // A binding margin at the top is folded into the top margin (the docx library only writes the left one).
+    const m = { top: cmToPx(base.top + (gutter.pos === "top" ? gutter.cm : 0)), bottom: cmToPx(base.bottom), left: cmToPx(base.left), right: cmToPx(base.right) };
+    return {
+      size: { width: w * TWIPS_PER_PX, height: h * TWIPS_PER_PX, orientation: page.orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
+      margin: { top: twips(m.top), bottom: twips(m.bottom), left: twips(m.left), right: twips(m.right), ...(gutter.cm && gutter.pos === "left" ? { gutter: twips(cmToPx(gutter.cm)) } : {}) },
+    };
+  };
+  // Sections: the first one is the document's own setup, every section break starts the next one (with its paper, margins and, when
+  // it has its own, headers and footers: a section without any takes the previous ones, as in Word).
+  const segments: Array<{ page: PageSetup; hf: HeaderFooterSettings | null; nodes: PM[] }> = [{ page: model.page, hf: model.headerFooter ?? null, nodes: [] }];
+  for (const n of model.content.content ?? []) {
+    if (n.type === SECTION_BREAK) segments.push({ page: sanitizePage(n.attrs?.page as Partial<PageSetup>), hf: n.attrs?.hf ? sanitizeHeaderFooter(n.attrs.hf) : null, nodes: [] });
+    else segments[segments.length - 1].nodes.push(n);
+  }
 
   // The editable styles are written in full, so other editors show what Loma Writer shows.
   const def = ctx.defaults.fontFamily;
@@ -319,22 +375,26 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
     },
     ...(model.headerFooter?.evenOdd ? { evenAndOddHeaderAndFooters: true } : {}),
     numbering: { config: numberingConfig },
-    sections: [
-      {
-        ...(model.headerFooter && hasContent(model.headerFooter.header) ? { headers: wrappers(model.headerFooter.header, (c) => new Header({ children: hfChildren(ctx, c) }), model.headerFooter.titlePage, model.headerFooter.evenOdd) } : {}),
-        ...(model.headerFooter && hasContent(model.headerFooter.footer) ? { footers: wrappers(model.headerFooter.footer, (c) => new Footer({ children: hfChildren(ctx, c) }), model.headerFooter.titlePage, model.headerFooter.evenOdd) } : {}),
+    sections: segments.map((seg, si) => {
+      const hf = seg.hf;
+      const children = blocks(ctx, seg.nodes);
+      return {
+        // A watermark lives in a header: one is created when the document has none.
+        ...(si === 0 && wm0 && !(hf && hasContent(hf.header)) ? { headers: { default: new Header({ children: [new Paragraph("")] }) } } : {}),
+        ...(hf && hasContent(hf.header) ? { headers: wrappers(hf.header, (c) => new Header({ children: hfChildren(ctx, c) }), hf.titlePage, hf.evenOdd) } : {}),
+        ...(hf && hasContent(hf.footer) ? { footers: wrappers(hf.footer, (c) => new Footer({ children: hfChildren(ctx, c) }), hf.titlePage, hf.evenOdd) } : {}),
         properties: {
-          ...(model.headerFooter?.titlePage ? { titlePage: true } : {}),
-          page: {
-            size: { width: w * TWIPS_PER_PX, height: h * TWIPS_PER_PX, orientation: model.page.orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
-            margin: { top: twips(m.top), bottom: twips(m.bottom), left: twips(m.left), right: twips(m.right), ...(gutter.cm && gutter.pos === "left" ? { gutter: twips(cmToPx(gutter.cm)) } : {}) },
-          },
+          type: SectionType.NEXT_PAGE,
+          ...(hf?.titlePage ? { titlePage: true } : {}),
+          page: pageProps(seg.page),
         },
         children: children.length ? children : [new Paragraph("")],
-      },
-    ],
+      };
+    }),
   });
   let bytes = await ctx.raw.apply(new Uint8Array(await Packer.toArrayBuffer(doc)));
   if (isMirrored(model.page)) bytes = await addMirrorMargins(bytes);
+  const wm = cleanWatermark(model.watermark);
+  if (wm) bytes = await addWatermark(bytes, wm);
   return { bytes, warnings: [...ctx.warnings] };
 }

@@ -3,6 +3,7 @@ import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { cleanPlace } from "../../editor/TableLook";
+import { sectionIndexAt } from "../../editor/Sections";
 
 const OUT = 26; // px around the table where its move handle is offered
 
@@ -81,7 +82,9 @@ export function TableMoveHandle({ editor }: { editor: Editor }) {
     // Horizontally the table follows the pointer anywhere on the page, margins included; vertically it lands between blocks.
     const stack = editor.view.dom.closest<HTMLElement>(".page-stack");
     const scale = stack ? stack.getBoundingClientRect().width / stack.offsetWidth || 1 : 1;
-    const geom = (editor.storage as unknown as { pagination?: { geometry: { width: number; insetLeft: number; insetRight: number } | null } }).pagination?.geometry;
+    const pag = (editor.storage as unknown as { pagination?: { geometry: { width: number; insetLeft: number; insetRight: number } | null; geometries?: Array<{ width: number; insetLeft: number; insetRight: number }> } }).pagination;
+    // The text area of the table's own section.
+    const geom = pag?.geometries?.[Math.min(sectionIndexAt(editor.state.doc, from), (pag.geometries.length || 1) - 1)] ?? pag?.geometry;
     const wrapper = table.closest<HTMLElement>(".tableWrapper") ?? table;
     const startNode = editor.state.doc.nodeAt(from);
     const base = cleanPlace(startNode?.attrs.place)?.x ?? 0;

@@ -5,6 +5,8 @@ import { cn } from "../../lib/cn";
 import { createHeaderFooterExtensions } from "../../editor/headerFooterExtensions";
 import { FONT_SIZES, TEXT_COLORS } from "../../editor/commands";
 import { sanitizeHeaderFooter, type HFBlock, type HeaderFooterSet } from "../../pagination/headerFooter";
+import { useLomaEditor } from "../../editor/EditorProvider";
+import { useSections } from "../../editor/useSections";
 import { useApp } from "../../state/store";
 import { RibbonButton } from "../ui/RibbonButton";
 import { Button, Dialog } from "../ui/Dialog";
@@ -18,7 +20,12 @@ export function HeaderFooterDialog() {
   const { state, set, notify } = useApp();
   const kind = state.hfKind;
   const noun = kind === "header" ? "l'en-tête" : "le pied de page";
-  const init = state.headerFooter;
+  // The headers and footers being edited are those of the section holding the caret (the first one is stored with the document).
+  const docEditor = useLomaEditor();
+  const { sections, current } = useSections(docEditor, state.page, state.headerFooter);
+  const sec = sections[current];
+  const init = sec.hf;
+  const [linked, setLinked] = useState(current > 0 && sec.linked);
   const [titlePage, setTitlePage] = useState(init.titlePage);
   const [evenOdd, setEvenOdd] = useState(init.evenOdd);
   const [active, setActive] = useState<Variant>("default");
@@ -36,6 +43,7 @@ export function HeaderFooterDialog() {
     editorProps: { attributes: { "aria-label": `Contenu de ${noun}`, role: "textbox" } },
   });
   useEffect(() => { editor?.commands.focus("end"); }, [editor]);
+  useEffect(() => { editor?.setEditable(!linked); }, [editor, linked]);
 
   const snap = useEditorState({
     editor,
@@ -62,10 +70,18 @@ export function HeaderFooterDialog() {
     // Variants that are switched off are not kept; sanitising also drops empty ones.
     if (!titlePage) delete part.first;
     if (!evenOdd) delete part.even;
-    const clean = sanitizeHeaderFooter({ ...state.headerFooter, [kind]: part, titlePage, evenOdd });
-    set((s) => ({ headerFooter: clean, doc: { ...s.doc, dirty: true }, dialog: null, ...(s.headerFooter ? {} : {}) }));
+    const clean = sanitizeHeaderFooter({ ...init, [kind]: part, titlePage, evenOdd });
+    writeSection(linked ? null : clean);
   };
-  const remove = () => set((s) => ({ headerFooter: { ...s.headerFooter, [kind]: {} }, doc: { ...s.doc, dirty: true }, dialog: null }));
+  const remove = () => writeSection(sanitizeHeaderFooter({ ...init, [kind]: {} }));
+  /** Section 0 keeps its headers in the document; the others in their break (null = the same as the previous section). */
+  const writeSection = (hf: ReturnType<typeof sanitizeHeaderFooter> | null) => {
+    if (current === 0 && hf) set((s) => ({ headerFooter: hf, doc: { ...s.doc, dirty: true }, dialog: null }));
+    else {
+      docEditor?.commands.setSectionHeaderFooter(current, hf);
+      set((s) => ({ doc: { ...s.doc, dirty: true }, dialog: null }));
+    }
+  };
 
   const onImage = (file: File | undefined) => {
     if (!file || !editor) return;
@@ -93,6 +109,12 @@ export function HeaderFooterDialog() {
     <Dialog title={kind === "header" ? "En-tête" : "Pied de page"} icon={PanelTop} onClose={close} width={680} backdropClose={false}
       footer={<><Button className="mr-auto" onClick={remove}>Supprimer {noun}</Button><Button onClick={close}>Annuler</Button><Button variant="primary" onClick={save}>Enregistrer</Button></>}>
       <div className="space-y-3 p-5">
+        {sections.length > 1 && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md bg-chrome px-3 py-2 text-[13px]">
+            <strong>Section {current + 1} sur {sections.length}</strong>
+            {current > 0 && <label className="flex items-center gap-2"><input type="checkbox" checked={linked} onChange={(e) => setLinked(e.target.checked)} /> Identique à la section précédente</label>}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
           <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={titlePage} onChange={(e) => { setTitlePage(e.target.checked); if (!e.target.checked && active === "first") switchTo("default"); }} /> Première page différente</label>
           <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={evenOdd} onChange={(e) => { setEvenOdd(e.target.checked); if (!e.target.checked && active === "even") switchTo("default"); }} /> Pages paires et impaires différentes</label>

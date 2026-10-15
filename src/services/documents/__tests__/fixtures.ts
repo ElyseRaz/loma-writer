@@ -50,6 +50,8 @@ export function richModel(): DocumentModel {
           { type: "shape", attrs: { kind: "ellipse", width: 100, height: 60, fill: "#bbf7d0", stroke: "#16a34a", strokeWidth: 2, wrap: "group", anchor: "paragraph", z: 0, x: 0, y: 0, align: "left" }, content: [p(t("A"))] },
           { type: "shape", attrs: { kind: "diamond", width: 90, height: 90, fill: "#e9d5ff", stroke: "#7c3aed", strokeWidth: 2, wrap: "group", anchor: "paragraph", z: 0, x: 120, y: 30, align: "left", rotation: 30 }, content: [{ type: "paragraph" }] },
         ] },
+        { type: "paragraph", attrs: { indentLeft: 1.5, indentRight: 0.5, firstLine: -0.75, spaceBefore: 12, spaceAfter: 6, keepWithNext: true, keepLines: true }, content: [t("Paragraphe mis en forme.")] },
+        { type: "paragraph", attrs: { pageBreakBefore: true, firstLine: 1 }, content: [t("Nouvelle page.")] },
         p(t("Fin du document.")),
       ],
     },
@@ -83,7 +85,11 @@ export function flatten(node: PM): Flat[] {
       }
       const align = n.attrs?.textAlign && n.attrs.textAlign !== "left" ? String(n.attrs.textAlign) : undefined;
       const deco = [n.attrs?.shading && `bg:${n.attrs.shading}`, n.attrs?.borders && `bd:${Object.keys(n.attrs.borders).filter((k) => n.attrs!.borders[k]).sort().join("+")}`].filter(Boolean).join(" ");
-      out.push({ type: n.type ?? "", ...(n.type === "heading" ? { level: n.attrs?.level } : {}), ...(align ? { align } : {}), ...(deco ? { deco } : {}), runs });
+      // A page break before a paragraph is the same thing as a page break node followed by the paragraph.
+      if (n.attrs?.pageBreakBefore) out.push({ type: "pageBreak", children: [] });
+      const lay = ["indentLeft", "indentRight", "firstLine", "spaceBefore", "spaceAfter", "keepWithNext", "keepLines"].filter((k) => n.attrs?.[k] !== undefined && n.attrs[k] !== null && n.attrs[k] !== false && n.attrs[k] !== 0).map((k) => `${k}=${n.attrs![k]}`).join(",");
+      const layoutDeco = lay ? ` lay:${lay}` : "";
+      out.push({ type: n.type ?? "", ...(n.type === "heading" ? { level: n.attrs?.level } : {}), ...(align ? { align } : {}), ...(deco || layoutDeco ? { deco: (deco + layoutDeco).trim() } : {}), runs });
     } else if (n.type === "shape") {
       const a = n.attrs!;
       const wrap = a.wrap && a.wrap !== "inline" ? ` wrap:${a.wrap}/${a.anchor}@${a.x},${a.y} z${a.z ?? 0}` : "";

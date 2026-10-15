@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
-import { pickHeaderFooter, type HeaderFooterContent, type SectionLayout } from "../../pagination/headerFooter";
-import type { PageGeometry } from "../../pagination/model";
+import { pickHeaderFooter, sectionFor, type HeaderFooterContent, type HeaderFooterSettings, type SectionLayout } from "../../pagination/headerFooter";
+import type { Watermark } from "../../editor/watermark";
+import { PAGE_GAP, type PageGeometry, type Sheet } from "../../pagination/model";
 import { headerFooterHtml, withPageNumbers } from "../../services/headerFooterHtml";
 
 export interface HeaderFooterHeights {
@@ -8,9 +9,15 @@ export interface HeaderFooterHeights {
   footer: number;
 }
 
-const sideStyle = (g: PageGeometry) => ({ left: g.insetLeft, right: g.insetRight });
+const sideStyle = (g: { insetLeft: number; insetRight: number }) => ({ left: g.insetLeft, right: g.insetRight });
 
-/** Hidden copy of every header/footer variant, to know how much room the page layout must reserve. */
+/** The part of the document a sheet belongs to: its paper and its headers and footers. */
+export interface SheetSection {
+  page: import("../../state/types").PageSetup;
+  hf: HeaderFooterSettings;
+}
+
+/** Hidden copy of every header/footer variant of a section, to know how much room the page layout must reserve. */
 function Measure({ section, geometry, onHeights }: { section: SectionLayout; geometry: PageGeometry; onHeights: (h: HeaderFooterHeights) => void }) {
   const root = useRef<HTMLDivElement>(null);
   const variants = (set: SectionLayout["header"]) => (["default", "first", "even"] as const).map((k) => set[k]).filter(Boolean) as HeaderFooterContent[];
@@ -30,7 +37,7 @@ function Measure({ section, geometry, onHeights }: { section: SectionLayout; geo
 }
 
 /** Corner marks at the corners of the text area (like Word's "Afficher les limites du texte"): they are not part of the document and are not printed. */
-function TextBounds({ geometry: g }: { geometry: PageGeometry }) {
+function TextBounds({ geometry: g }: { geometry: { width: number; height: number; insetLeft: number; insetRight: number; insetTop: number; insetBottom: number } }) {
   const L = Math.min(14, g.insetLeft, g.insetTop);
   const mark = (x: number, y: number, right: boolean, bottom: boolean) => (
     <span
@@ -43,27 +50,57 @@ function TextBounds({ geometry: g }: { geometry: PageGeometry }) {
   return <div aria-hidden data-bounds className="pointer-events-none absolute inset-0">{mark(l, t, false, false)}{mark(r, t, true, false)}{mark(l, b, false, true)}{mark(r, b, true, true)}</div>;
 }
 
+/** The watermark, centred on the sheet, behind the text; it is part of the page, so it prints. */
+function WatermarkMark({ watermark: w }: { watermark: Watermark }) {
+  return (
+    <div aria-hidden data-watermark className="pointer-events-none absolute inset-0 flex select-none items-center justify-center overflow-hidden">
+      <span style={{ fontSize: `${w.size}pt`, fontWeight: 700, whiteSpace: "nowrap", color: w.color, opacity: w.opacity, transform: w.layout === "diagonal" ? "rotate(-45deg)" : "none", fontFamily: '"Calibri", "Carlito", sans-serif', lineHeight: 1 }}>{w.text}</span>
+    </div>
+  );
+}
+
 /**
- * The white sheets drawn behind the text, one per page, `gap` apart, with their header and footer. The HTML
- * comes from the editor schema (never from raw user markup).
+ * The white sheets drawn behind the text, one per page, with their header and footer. Each sheet has the size of its section; the
+ * HTML comes from the editor schema (never from raw user markup).
  */
-export function PageSheets({ pages, geometry, section, onHeights, bounds = true }: { pages: number; geometry: PageGeometry; section: SectionLayout; onHeights: (h: HeaderFooterHeights) => void; bounds?: boolean }) {
+export function PageSheets({ sheets, sections, geometries, onHeights, bounds = true, watermark = null }: {
+  sheets: Sheet[];
+  sections: SheetSection[];
+  /** Geometry of each section (used to measure its header and footer). */
+  geometries: PageGeometry[];
+  /** Measured header/footer heights, one entry per section. */
+  onHeights: (index: number, h: HeaderFooterHeights) => void;
+  bounds?: boolean;
+  watermark?: Watermark | null;
+}) {
+  const pages = sheets.length;
+  let sumHeights = 0;
   return (
     <>
-      <Measure section={section} geometry={geometry} onHeights={onHeights} />
-      {Array.from({ length: pages }, (_, i) => {
-        const header = pickHeaderFooter(section.header, section, i, i + 1);
-        const footer = pickHeaderFooter(section.footer, section, i, i + 1);
+      {sections.map((sec, i) => <Measure key={i} section={sectionFor(sec.page, sec.hf)} geometry={geometries[Math.min(i, geometries.length - 1)]} onHeights={(h) => onHeights(i, h)} />)}
+      {sheets.map((sheet, i) => {
+        const sec = sections[Math.min(sheet.section, sections.length - 1)];
+        const layout = sectionFor(sec.page, sec.hf);
+        const header = pickHeaderFooter(layout.header, layout, sheet.indexInSection, i + 1);
+        const footer = pickHeaderFooter(layout.footer, layout, sheet.indexInSection, i + 1);
+        const top = sumHeights;
+        sumHeights += sheet.height;
         return (
           <div
             key={i}
             data-page={i + 1}
-            className="page-sheet absolute left-0"
-            style={{ top: `calc(${i} * (${geometry.height}px + var(--pg-gap, ${geometry.gap}px)))`, width: geometry.width, height: geometry.height }}
+            data-section={sheet.section + 1}
+            data-inset-top={sheet.insetTop}
+            data-inset-bottom={sheet.insetBottom}
+            data-inset-left={sheet.insetLeft}
+            data-inset-right={sheet.insetRight}
+            className="page-sheet absolute"
+            style={{ left: sheet.left, top: `calc(${top}px + ${i} * var(--pg-gap, ${PAGE_GAP}px))`, width: sheet.width, height: sheet.height }}
           >
-            {bounds && <TextBounds geometry={geometry} />}
-            {header && <div className="hf hf-body" style={{ top: 30, ...sideStyle(geometry) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(header.blocks), i + 1, pages) }} />}
-            {footer && <div className="hf hf-body" style={{ bottom: 30, ...sideStyle(geometry) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(footer.blocks), i + 1, pages) }} />}
+            {watermark && <WatermarkMark watermark={watermark} />}
+            {bounds && <TextBounds geometry={sheet} />}
+            {header && <div className="hf hf-body" style={{ top: 30, ...sideStyle(sheet) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(header.blocks), i + 1, pages) }} />}
+            {footer && <div className="hf hf-body" style={{ bottom: 30, ...sideStyle(sheet) }} dangerouslySetInnerHTML={{ __html: withPageNumbers(headerFooterHtml(footer.blocks), i + 1, pages) }} />}
           </div>
         );
       })}

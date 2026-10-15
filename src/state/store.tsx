@@ -34,6 +34,7 @@ function initialState(): AppState {
     page: DEFAULT_PAGE,
     headerFooter: emptyHeaderFooter(),
     docStyles: {},
+    watermark: null,
     styleTarget: "h1",
     hfKind: "header",
     equationPos: null,

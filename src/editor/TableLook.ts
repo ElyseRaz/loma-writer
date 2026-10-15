@@ -71,7 +71,7 @@ export const TableLookExtension = Extension.create({
               const place = cleanPlace(node.attrs.place);
               if (node.attrs.look || place) {
                 const look = node.attrs.look ? htmlAttrs(cleanLook(node.attrs.look)) : { style: "" };
-                const style = `${look.style};${place ? `margin-left:${place.x}px;width:${place.w}px` : ""}`;
+                const style = `${look.style};${place ? `margin-left:calc(var(--sec-l, 0px) + ${place.x}px);width:${place.w}px` : ""}`;
                 decos.push(Decoration.node(pos, pos + node.nodeSize, { ...look, ...(place ? { "data-placed": "" } : {}), style }));
               }
               return false;

@@ -13,14 +13,22 @@ window.__lomaAudit = function () {
   const padB = parseFloat(getComputedStyle(document.querySelector(".paper")).paddingBottom);
   const H = pageH - pad - padB;
   const originTop = rect0.top; // top of page 1
+  // Every sheet may have its own size (sections): its text area is what its characters must stay in.
+  const info = sheets.map((el) => { const r = el.getBoundingClientRect(); return { top: (r.top - rect0.top) / zoom, left: (r.left - rect0.left) / zoom, w: r.width / zoom, h: r.height / zoom, it: +el.dataset.insetTop || pad, ib: +el.dataset.insetBottom || padB, il: +el.dataset.insetLeft || 0, ir: +el.dataset.insetRight || 0 }; });
   const problems = [];
   const eps = 1.5;
-  const check = (name, top, bottom) => {
+  const check = (name, top, bottom, left, right) => {
     const y1 = (top - originTop) / zoom;
     const y2 = (bottom - originTop) / zoom;
-    const page = Math.floor((y1 - pad + eps) / pitch);
-    const lo = page * pitch + pad, hi = page * pitch + pad + H;
+    let page = 0;
+    info.forEach((s, i) => { if (s.top + s.it <= y1 + eps) page = i; });
+    const s = info[page];
+    const lo = s.top + s.it, hi = s.top + s.h - s.ib;
     if (y1 < lo - eps || y2 > hi + eps) problems.push(`${name}: ${y1.toFixed(1)}..${y2.toFixed(1)} page ${page + 1} content ${lo.toFixed(1)}..${hi.toFixed(1)}`);
+    if (left !== undefined) {
+      const x1 = (left - rect0.left) / zoom, x2 = (right - rect0.left) / zoom;
+      if (x1 < s.left + s.il - eps || x2 > s.left + s.w - s.ir + eps) problems.push(`${name}: x ${x1.toFixed(1)}..${x2.toFixed(1)} outside text width ${(s.left + s.il).toFixed(1)}..${(s.left + s.w - s.ir).toFixed(1)} (page ${page + 1})`);
+    }
   };
   const range = document.createRange();
   let lines = 0;
@@ -33,7 +41,7 @@ window.__lomaAudit = function () {
       for (let o = 0; o < node.length; o++) {
         range.setStart(node, o); range.setEnd(node, o + 1);
         const r = range.getClientRects()[0];
-        if (r && r.width > 0) { lines++; check(`${el.tagName}#${n} char ${o}`, r.top, r.bottom); }
+        if (r && r.width > 0) { lines++; const ws = /\s/.test(node.data[o]); check(`${el.tagName}#${n} char ${o}`, r.top, r.bottom, ws ? undefined : r.left, ws ? undefined : r.right); }
       }
     }
   });

@@ -43,6 +43,30 @@ describe.skipIf(!hasLibreOffice)("interoperability with LibreOffice (independent
     for (const s of ["Rapport de stage", "Puce A", "Sous-puce A1", "Deuxième.un", "Cellule fusionnée", "Une citation importante.", "let x = 1;", "Fin du document."]) expect(txt).toContain(s);
   });
 
+  describe("sections", () => {
+    const P = (text: string) => ({ type: "paragraph", content: [{ type: "text", text }] });
+    const sectioned = () => ({
+      content: { type: "doc", content: [P("Un"), { type: "sectionBreak", attrs: { page: { size: "A4", orientation: "landscape", margins: "narrow" }, hf: null } }, P("Deux"), { type: "sectionBreak", attrs: { page: { size: "Letter", orientation: "portrait", margins: "normal" }, hf: null } }, P("Trois")] },
+      page: { size: "A4", orientation: "portrait", margins: "normal" },
+    }) as never;
+    const shape = (m: { content: { content?: Array<{ type?: string; attrs?: Record<string, unknown> }> }; page: { size: string; orientation: string } }) => [
+      `${m.page.size}/${m.page.orientation}`,
+      ...(m.content.content ?? []).filter((n) => n.type === "sectionBreak").map((n) => `${(n.attrs?.page as { size: string }).size}/${(n.attrs?.page as { orientation: string }).orientation}`),
+    ];
+    const want = ["A4/portrait", "A4/landscape", "Letter/portrait"];
+    it("our DOCX -> LibreOffice -> ODT -> our importer keeps the sections", async () => {
+      const odt = libreOffice((await exportDocx(sectioned())).bytes, "docx", "odt");
+      const { model } = await importOdt(odt);
+      expect(shape(model as never)).toEqual(want);
+      expect(plainText(model.content)).toContain("Trois");
+    });
+    it("our ODT -> LibreOffice -> DOCX -> our importer keeps the sections", async () => {
+      const docx = libreOffice((await exportOdt(sectioned())).bytes, "odt", "docx");
+      const { model } = await importDocx(docx);
+      expect(shape(model as never)).toEqual(want);
+    });
+  });
+
   it("our ODT -> LibreOffice -> DOCX -> our importer keeps the document skeleton", async () => {
     const model = richModel();
     const docx = libreOffice((await exportOdt(model)).bytes, "odt", "docx");

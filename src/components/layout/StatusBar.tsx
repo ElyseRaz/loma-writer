@@ -1,6 +1,7 @@
 import { BookOpen, Check, Circle, Globe, Minus, Plus, ScrollText } from "lucide-react";
 import { useLomaEditor } from "../../editor/EditorProvider";
 import { useEditorSnapshot } from "../../editor/useEditorSnapshot";
+import { useSections } from "../../editor/useSections";
 import { useCommandMap } from "../../editor/commands";
 import { useApp } from "../../state/store";
 import { pageGeometry } from "../../pagination/model";
@@ -12,6 +13,7 @@ export function StatusBar() {
   const { state, set } = useApp();
   const cmds = useCommandMap();
   const { pitch } = pageGeometry(state.page);
+  const { sections, current } = useSections(editor, state.page, state.headerFooter);
   const { current: page, total } = usePageInfo(editor, pitch);
   const setZoom = (zoom: number) => set({ zoom });
   const dot = <Circle size={3} className="fill-muted text-muted" aria-hidden />;
@@ -22,6 +24,7 @@ export function StatusBar() {
       <span title="Pagination calculée à partir de la mise en page réelle">
         Page {page} sur {total}
       </span>
+      {sections.length > 1 && <span className="ml-2.5" title="Section du curseur">Section {current + 1}</span>}
       <span className="mx-2.5">{dot}</span>
       <span>{plural(snap.words, "mot")}</span>
       <span className="mx-2.5">{dot}</span>

@@ -1,5 +1,8 @@
+import { pageDimensions } from "./page";
+import { readSections } from "../editor/Sections";
 import { sanitizePage } from "../services/documents/sanitize";
 import { cleanStyles } from "../editor/docStyles";
+import { cleanWatermark } from "../editor/watermark";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { Editor } from "@tiptap/react";
 import { useLomaEditor } from "../editor/EditorProvider";
@@ -67,8 +70,8 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
   );
 
   const snapshot = useCallback((ed: Editor): DocumentModel => {
-    const { page, prefs, headerFooter, docStyles } = stateRef.current;
-    return { content: ed.getJSON(), page, headerFooter, styles: docStyles, defaults: { fontFamily: prefs.fontFamily, fontSizePt: prefs.fontSizePt } };
+    const { page, prefs, headerFooter, docStyles, watermark } = stateRef.current;
+    return { content: ed.getJSON(), page, headerFooter, styles: docStyles, watermark, defaults: { fontFamily: prefs.fontFamily, fontSizePt: prefs.fontSizePt } };
   }, []);
 
   const newDocument = useCallback(
@@ -76,7 +79,7 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
       if (!editor) return;
       guard(() => {
         loadContent(editor, template?.html ?? "<p></p>");
-        set({ page: DEFAULT_PAGE, headerFooter: emptyHeaderFooter(), docStyles: {} });
+        set({ page: DEFAULT_PAGE, headerFooter: emptyHeaderFooter(), docStyles: {}, watermark: null });
         markLoaded(UNTITLED, null, DEFAULT_FORMAT);
         queueMicrotask(() => editor.commands.focus("start"));
       });
@@ -99,11 +102,11 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
           if (opened.html !== undefined) {
             // HTML / text are imports: saving asks for a real document format and path.
             loadContent(editor, opened.html);
-            set({ page: DEFAULT_PAGE, headerFooter: emptyHeaderFooter(), docStyles: {} });
+            set({ page: DEFAULT_PAGE, headerFooter: emptyHeaderFooter(), docStyles: {}, watermark: null });
             markLoaded(stripExt(name), null, DEFAULT_FORMAT);
           } else {
             loadContent(editor, opened.model.content);
-            set({ page: opened.model.page, headerFooter: sanitizeHeaderFooter(opened.model.headerFooter), docStyles: cleanStyles(opened.model.styles) });
+            set({ page: opened.model.page, headerFooter: sanitizeHeaderFooter(opened.model.headerFooter), docStyles: cleanStyles(opened.model.styles), watermark: cleanWatermark(opened.model.watermark) });
             const format = opened.format as DocFormat;
             // A wrong extension must not make "Enregistrer" silently rewrite the file in another format.
             markLoaded(stripExt(name), mismatch ? null : path, format, lossy);
@@ -190,9 +193,15 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
 
   const print = useCallback(() => {
     set({ view: "editor" });
+    // One print job has one paper size: sections of other sizes would be cut where the first section's pages end.
+    if (editor) {
+      const secs = readSections(editor.state.doc, stateRef.current.page, stateRef.current.headerFooter);
+      const dims = new Set(secs.map((s) => pageDimensions(s.page)).map((d) => `${d.w}x${d.h}`));
+      if (dims.size > 1) notify("Les sections n'ont pas toutes le même format : l'impression suit celui de la première section. Pour un résultat exact, enregistrez en DOCX ou ODT et imprimez depuis Word ou LibreOffice.", "info");
+    }
     // Let the editor view mount before the print dialog snapshots the page.
     setTimeout(() => void printPage().catch((e) => notify(`Impression impossible : ${errorMessage(e)}`, "error")), 150);
-  }, [set, notify]);
+  }, [set, notify, editor]);
 
   const quit = useCallback(
     () =>
@@ -220,7 +229,7 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
       const { doc, page } = stateRef.current;
       if (!doc.dirty) return; // saved in the meantime
       try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({ title: doc.title, path: doc.path, format: doc.format, lossy: doc.lossy, page, headerFooter: stateRef.current.headerFooter, docStyles: stateRef.current.docStyles, content: editor.getJSON() }));
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({ title: doc.title, path: doc.path, format: doc.format, lossy: doc.lossy, page, headerFooter: stateRef.current.headerFooter, docStyles: stateRef.current.docStyles, watermark: stateRef.current.watermark, content: editor.getJSON() }));
       } catch {
         /* draft too large or storage unavailable */
       }
@@ -241,10 +250,10 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
       if (!raw) return;
-      const draft = JSON.parse(raw) as { title: string; path: string | null; format?: string; lossy?: string[]; page?: Partial<PageSetup>; headerFooter?: HeaderFooterSettings; docStyles?: unknown; content: object };
+      const draft = JSON.parse(raw) as { title: string; path: string | null; format?: string; lossy?: string[]; page?: Partial<PageSetup>; headerFooter?: HeaderFooterSettings; docStyles?: unknown; watermark?: unknown; content: object };
       loadContent(editor, draft.content);
       const format = (draft.format as DocFormat | undefined) ?? (draft.path ? formatFromPath(draft.path) : null) ?? DEFAULT_FORMAT;
-      set({ doc: { title: draft.title, path: draft.path, dirty: true, format, lossy: draft.lossy ?? [] }, page: sanitizePage(draft.page), headerFooter: sanitizeHeaderFooter(draft.headerFooter), docStyles: cleanStyles(draft.docStyles), view: "editor" });
+      set({ doc: { title: draft.title, path: draft.path, dirty: true, format, lossy: draft.lossy ?? [] }, page: sanitizePage(draft.page), headerFooter: sanitizeHeaderFooter(draft.headerFooter), docStyles: cleanStyles(draft.docStyles), watermark: cleanWatermark(draft.watermark), view: "editor" });
       notify("Brouillon non enregistré restauré.");
     } catch {
       localStorage.removeItem(DRAFT_KEY);

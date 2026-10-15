@@ -380,3 +380,16 @@ select {
 .paper .ProseMirror .img-move { position: absolute; left: -26px; top: -26px; width: 15px; height: 15px; background: #fff; border: 2px solid #2563eb; border-radius: 3px; cursor: move; opacity: 0; z-index: 3; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%232563eb' stroke-width='1.6'%3E%3Cpath d='M8 2v12M2 8h12'/%3E%3C/svg%3E"); background-size: contain; }
 .paper .ProseMirror .img-box:hover > span, .paper .ProseMirror .ProseMirror-selectednode > .img-box > span { opacity: 1; }
 @media print { .img-handle, .img-rotate, .img-move { display: none !important; } }
+
+/* Sections: the left and right margin of the section a top-level block belongs to (set by the pagination, see sectionMargins). */
+.paper .ProseMirror > * * { --sec-l: 0px; --sec-r: 0px; }
+.paper .ProseMirror > p, .paper .ProseMirror > h1, .paper .ProseMirror > h2, .paper .ProseMirror > h3, .paper .ProseMirror > ul, .paper .ProseMirror > ol,
+.paper .ProseMirror > blockquote, .paper .ProseMirror > pre, .paper .ProseMirror > hr, .paper .ProseMirror > .tableWrapper, .paper .ProseMirror > .shape-anchor,
+.paper .ProseMirror > .section-break, .paper .ProseMirror > .page-break { margin-left: var(--sec-l, 0px); margin-right: var(--sec-r, 0px); }
+.paper .ProseMirror > .tableWrapper[data-placed] { margin-left: calc(var(--sec-l, 0px) + var(--place-x, 0px)); }
+/* The mark of a section break in the text (not printed). */
+.paper .ProseMirror .section-break { display: flex; align-items: center; gap: 8px; margin-top: 0.8em; margin-bottom: 0.8em; color: #6b7280; font: 600 10px/1 var(--font-ui, system-ui); text-transform: uppercase; letter-spacing: 0.06em; user-select: none; cursor: default; }
+.paper .ProseMirror .section-break::before, .paper .ProseMirror .section-break::after { content: ""; flex: 1; border-top: 2px double #9ca3af; }
+.paper .ProseMirror .section-break.ProseMirror-selectednode { color: #2563eb; }
+.paper .ProseMirror .section-break.ProseMirror-selectednode::before, .paper .ProseMirror .section-break.ProseMirror-selectednode::after { border-top-color: #2563eb; }
+@media print { .section-break { display: none !important; } }

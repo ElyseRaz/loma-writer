@@ -7,8 +7,8 @@ const A4: PageGeometry = pageGeometry(DEFAULT_PAGE); // 1123 high, 96 margins ->
 const LH = 24;
 
 /** Natural flow of paragraphs (margin 10px between) from the given line counts. */
-function flow(lineCounts: number[], opts: { headings?: number[]; breaks?: number[] } = {}): Atom[] {
-  let y = 0;
+function flow(lineCounts: number[], opts: { headings?: number[]; breaks?: number[] } = {}, start = 0): Atom[] {
+  let y = start;
   return lineCounts.map((n, i) => {
     const top = y;
     const bottom = y + n * LH;
@@ -165,6 +165,41 @@ describe("pagination engine", () => {
     expect(res.breaks.every((b) => b.repeat === 30)).toBe(true);
   });
 
+  it("\"page break before\" starts a new page, except at the top of one", () => {
+    const atoms = flow([3, 3, 3, 3]);
+    atoms[2].breakBefore = true;
+    const res = paginate(atoms, A4);
+    expect(res.startPage[2]).toBe(1);
+    expect(res.startPage[3]).toBe(1);
+    assertLayout(atoms, A4, res);
+    // already at the top of a page: no empty page is added
+    const first = flow([3, 3]);
+    first[0].breakBefore = true;
+    expect(paginate(first, A4).pages).toBe(1);
+  });
+
+  it("\"keep lines together\" moves the whole paragraph instead of splitting it", () => {
+    const split = flow([30, 30, 30]); // 3 paragraphs of 30 lines: the second one straddles the first page end
+    const kept = flow([30, 30, 30]);
+    kept[1].keepLines = true;
+    const a = paginate(split, A4);
+    const b = paginate(kept, A4);
+    expect(a.breaks.some((x) => x.atom === 1 && x.line !== null)).toBe(true);
+    expect(b.breaks.some((x) => x.atom === 1 && x.line !== null)).toBe(false);
+    assertLayout(kept, A4, b);
+  });
+
+  it("a paragraph set to \"keep with next\" never ends a page alone", () => {
+    const atoms = flow([20, 20, 20, 20, 20]);
+    atoms[1].keepWithNext = true;
+    atoms[1].lines = undefined;
+    atoms[1].kind = "block";
+    const res = paginate(atoms, A4);
+    const last = (i: number) => atoms[i].bottom + appliedOffset(res.breaks, i);
+    // the atom after it starts on the same page as it ends
+    expect(Math.floor((last(1) - 1) / A4.pitch)).toBe(res.startPage[2]);
+  });
+
   it("random documents always satisfy the layout invariants", () => {
     let seed = 7;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -180,5 +215,64 @@ describe("pagination engine", () => {
       expect(res.startPage).toHaveLength(atoms.length);
       expect([...res.startPage]).toEqual([...res.startPage].sort((a, b) => a - b));
     }
+  });
+});
+
+describe("sections", () => {
+  const portrait = pageGeometry(DEFAULT_PAGE);
+  const landscape = pageGeometry({ ...DEFAULT_PAGE, orientation: "landscape" });
+  const sec = (top: number, section: number): Atom => ({ kind: "section", top, bottom: top + 4, section });
+
+  it("a section starts on a new page, with its own size", () => {
+    const a = flow([10, 10]); // page 1
+    const b: Atom = sec(a[1].bottom + 10, 1);
+    const c = flow([10, 10], {}, b.bottom + 10);
+    const atoms = [...a, b, ...c];
+    const res = paginate(atoms, [portrait, landscape]);
+    expect(res.startPage.slice(0, 2)).toEqual([0, 0]);
+    expect(res.startPage[3]).toBe(1); // first atom of the second section: page 2
+    expect(res.sheets).toHaveLength(2);
+    expect(res.sheets[0]).toMatchObject({ width: portrait.width, height: portrait.height, section: 0 });
+    expect(res.sheets[1]).toMatchObject({ width: landscape.width, height: landscape.height, section: 1, indexInSection: 0 });
+    // the second sheet starts below the first one, a gap apart
+    expect(res.sheets[1].top).toBeCloseTo(res.sheets[0].top + portrait.height + portrait.gap, 5);
+    // the content of section 2 begins at the top of its text area
+    const first = atoms[3];
+    const y = first.top + appliedOffset(res.breaks, 3);
+    expect(y).toBeCloseTo(res.sheets[1].top + landscape.insetTop, 5);
+  });
+
+  it("pages after the break use the new text height", () => {
+    const a = flow([5]);
+    const b = sec(a[0].bottom + 10, 1);
+    const tall = flow(Array(60).fill(4), {}, b.bottom + 10);
+    const res = paginate([...a, b, ...tall], [portrait, landscape]);
+    const secPages = res.sheets.filter((s) => s.section === 1);
+    expect(secPages.length).toBeGreaterThan(2);
+    // landscape pages are closer together than portrait ones
+    expect(secPages[1].top - secPages[0].top).toBeCloseTo(landscape.pitch, 5);
+    expect(landscape.pitch).toBeLessThan(portrait.pitch);
+    // every atom sits inside the text area of its page
+    tall.forEach((t, k) => {
+      const i = 2 + k;
+      const top = t.top + appliedOffset(res.breaks, i);
+      const sheet = res.sheets[res.startPage[i]];
+      expect(top).toBeGreaterThanOrEqual(sheet.top + sheet.insetTop - 0.5);
+      expect(top).toBeLessThan(sheet.top + sheet.height - sheet.insetBottom); // (paragraphs may be split by lines: only the start is checked)
+    });
+  });
+
+  it("a section break at the very end still gives the new section a page", () => {
+    const a = flow([5]);
+    const res = paginate([...a, sec(a[0].bottom + 10, 1)], [portrait, landscape]);
+    expect(res.pages).toBe(2);
+    expect(res.sheets[1].width).toBe(landscape.width);
+  });
+
+  it("a single geometry still works as before", () => {
+    const atoms = flow(Array(40).fill(8));
+    expect(paginate(atoms, portrait)).toEqual(paginate(atoms, [portrait]));
+    const sh = paginate(atoms, portrait).sheets;
+    expect(sh[1].top - sh[0].top).toBeCloseTo(portrait.pitch, 5);
   });
 });

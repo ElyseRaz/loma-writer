@@ -44,6 +44,8 @@ describe("ODT", () => {
     const content = await zip.file("content.xml")!.async("string");
     zip.file("content.xml", content.replace("</office:automatic-styles>", '<style:style style:name="PB" style:family="paragraph"><style:paragraph-properties fo:break-before="page"/></style:style></office:automatic-styles>').replace("</office:text>", '<text:p text:style-name="PB">Nouvelle page</text:p></office:text>'));
     const { model } = await importOdt(await zip.generateAsync({ type: "uint8array" }));
+    const last = model.content.content!.at(-1)!;
+    expect(last.attrs?.pageBreakBefore).toBe(true); // the paragraph option, not a separate break
     expect(flatten(model.content).slice(-2).map((b) => b.type)).toEqual(["pageBreak", "paragraph"]);
   });
 

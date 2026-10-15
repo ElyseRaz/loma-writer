@@ -1,4 +1,5 @@
 import { Extension } from "@tiptap/core";
+import { placeInSheets, sheetIndexAt, stackSheets, type StackSheet } from "../pagination/pageLayout";
 import { internalPasteWanted, markedCopyOnClipboard, pasteInternal } from "./InternalClipboard";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection, Plugin, type EditorState } from "@tiptap/pm/state";
@@ -14,19 +15,14 @@ interface Metrics {
   stack: HTMLElement;
   s: DOMRect;
   scale: number;
-  pitch: number;
-  pages: number;
-  pageW: number;
-  pageH: number;
+  sheets: StackSheet[];
 }
 
 function metrics(view: EditorView): Metrics | null {
   const stack = view.dom.closest<HTMLElement>(".page-stack");
-  const pitch = Number(stack?.dataset.pitch) || 0;
-  if (!stack || !pitch) return null;
+  if (!stack || !(Number(stack.dataset.pitch) > 0)) return null;
   const s = stack.getBoundingClientRect();
-  const sheet = stack.querySelector<HTMLElement>(".page-sheet");
-  return { stack, s, scale: s.width / stack.offsetWidth || 1, pitch, pages: Number(stack.dataset.pages) || 1, pageW: stack.offsetWidth, pageH: sheet?.offsetHeight ?? pitch };
+  return { stack, s, scale: s.width / stack.offsetWidth || 1, sheets: stackSheets(stack) };
 }
 
 const boxOf = (view: EditorView, pos: number): HTMLElement | null => {
@@ -58,23 +54,20 @@ function nudge(view: EditorView, dx: number, dy: number): boolean {
   const a = sel.node.attrs;
   const { w, h } = dimsOf(sel.node, box);
   const free = a.wrap === "front" || a.wrap === "behind";
-  let x: number, yPage: number, page: number;
   const anchorRect = (view.nodeDOM(sel.from) as HTMLElement).getBoundingClientRect();
-  const anchorPage = Math.max(0, Math.floor(((anchorRect.top - m.s.top) / m.scale + 1) / m.pitch));
+  const anchorSheet = m.sheets[sheetIndexAt(m.sheets, (anchorRect.top - m.s.top) / m.scale)];
+  // Position in stack coordinates after the step, then back to the sheet it ends on.
+  let ax: number, ay: number;
   if (free && a.anchor === "page") {
-    x = num(a.x) + dx;
-    yPage = num(a.y) + dy;
-    page = anchorPage;
+    ax = anchorSheet.left + num(a.x) + dx;
+    ay = anchorSheet.top + num(a.y) + dy;
   } else {
     const r = box.getBoundingClientRect();
-    x = (r.left + r.width / 2 - m.s.left) / m.scale - w / 2 + dx;
-    const absY = (r.top + r.height / 2 - m.s.top) / m.scale - h / 2 + dy;
-    page = Math.max(0, Math.floor((absY + 1) / m.pitch));
-    yPage = absY - page * m.pitch;
+    ax = (r.left + r.width / 2 - m.s.left) / m.scale - w / 2 + dx;
+    ay = (r.top + r.height / 2 - m.s.top) / m.scale - h / 2 + dy;
   }
-  x = Math.round(Math.min(Math.max(x, 0), Math.max(0, m.pageW - w)));
-  yPage = Math.round(Math.min(Math.max(yPage, 0), Math.max(0, m.pageH - h)));
-  const tr = view.state.tr.setNodeMarkup(sel.from, undefined, { ...a, wrap: a.wrap === "behind" ? "behind" : "front", anchor: "page", x, y: yPage });
+  const placed = placeInSheets(m.sheets, ax, ay, w, h);
+  const tr = view.state.tr.setNodeMarkup(sel.from, undefined, { ...a, wrap: a.wrap === "behind" ? "behind" : "front", anchor: "page", x: placed.x, y: placed.y });
   tr.setSelection(NodeSelection.create(tr.doc, sel.from));
   view.dispatch(tr);
   return true;
@@ -127,17 +120,17 @@ export function pasteObjectAtPointer(view: EditorView, slice: Slice): boolean {
   }
 
   const { w, h } = dimsOf(node, null);
-  let x = Math.round(Math.min(Math.max(px - w / 2, 0), Math.max(0, m.pageW - w)));
-  let absY = Math.max(0, py - h / 2);
-  let page = Math.min(m.pages - 1, Math.max(0, Math.floor(absY / m.pitch)));
-  let y = Math.round(Math.min(Math.max(absY - page * m.pitch, 0), Math.max(0, m.pageH - h)));
+  const placed = placeInSheets(m.sheets, px - w / 2, Math.max(0, py - h / 2), w, h);
+  const page = placed.page;
+  const sheet = m.sheets[page];
+  let { x, y } = placed;
   // Pasting again at the same spot must not hide the previous copy: shift until the place is free.
   const taken = (xx: number, yy: number) => {
     let hit = false;
     doc.descendants((n) => { if (OBJECTS.has(n.type.name) && n.attrs.wrap === "front" && Math.abs(num(n.attrs.x) - xx) < 4 && Math.abs(num(n.attrs.y) - yy) < 4) hit = true; });
     return hit;
   };
-  for (let i = 0; i < 20 && taken(x, y); i++) { x = Math.min(x + 14, Math.max(0, m.pageW - w)); y = Math.min(y + 14, Math.max(0, m.pageH - h)); }
+  for (let i = 0; i < 20 && taken(x, y); i++) { x = Math.min(x + 14, Math.max(0, sheet.width - w)); y = Math.min(y + 14, Math.max(0, sheet.height - h)); }
   const attrs = { ...node.attrs, wrap: "front", anchor: "page", x, y, z: nextZ(view.state) };
   const pasted = node.type.create(attrs, node.content, node.marks);
 
@@ -149,7 +142,7 @@ export function pasteObjectAtPointer(view: EditorView, slice: Slice): boolean {
     lastText = off;
     if (anchorOff >= 0) return;
     const dom = view.nodeDOM(off);
-    if (dom instanceof HTMLElement && (dom.getBoundingClientRect().top - m.s.top) / m.scale >= page * m.pitch - 2) anchorOff = off;
+    if (dom instanceof HTMLElement && (dom.getBoundingClientRect().top - m.s.top) / m.scale >= sheet.top - 2) anchorOff = off;
   });
   if (anchorOff < 0) anchorOff = lastText;
   const tr = view.state.tr;

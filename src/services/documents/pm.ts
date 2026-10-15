@@ -1,3 +1,4 @@
+import { cleanLayout, DEFAULT_LAYOUT, type ParagraphLayout } from "../../editor/ParagraphFormat";
 import type { JSONContent } from "@tiptap/react";
 
 export type PM = JSONContent;
@@ -47,9 +48,16 @@ export const textNode = (text: string, props: RunProps = {}): PM => {
 export interface BlockDecoration {
   shading?: string | null;
   borders?: { top?: boolean; right?: boolean; bottom?: boolean; left?: boolean } | null;
+  /** Indents, spacing and page-flow options (only the non-default ones are kept). */
+  layout?: Partial<ParagraphLayout>;
 }
 
-const decorationAttrs = (d?: BlockDecoration) => ({ ...(d?.shading ? { shading: d.shading } : {}), ...(d?.borders ? { borders: d.borders } : {}) });
+const layoutAttrs = (l?: Partial<ParagraphLayout>) => {
+  if (!l) return {};
+  const c = cleanLayout(l);
+  return Object.fromEntries(Object.entries(c).filter(([k, v]) => v !== (DEFAULT_LAYOUT as unknown as Record<string, unknown>)[k]));
+};
+const decorationAttrs = (d?: BlockDecoration) => ({ ...(d?.shading ? { shading: d.shading } : {}), ...(d?.borders ? { borders: d.borders } : {}), ...layoutAttrs(d?.layout) });
 
 export const paragraph = (content: PM[], align?: string, deco?: BlockDecoration): PM => {
   const attrs = { ...(align && align !== "left" ? { textAlign: align } : {}), ...decorationAttrs(deco) };

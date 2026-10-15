@@ -1,3 +1,4 @@
+import { cleanLayout, DEFAULT_LAYOUT, type ParagraphLayout } from "./ParagraphFormat";
 import { useEditorState, type Editor } from "@tiptap/react";
 
 export interface EditorSnapshot {
@@ -21,6 +22,8 @@ export interface EditorSnapshot {
   fontSize: string | null;
   color: string | null;
   lineHeight: string | null;
+  /** Layout of the paragraph holding the cursor (indents, spacing, page flow). */
+  layout: ParagraphLayout;
   canUndo: boolean;
   canRedo: boolean;
   inTable: boolean;
@@ -32,7 +35,7 @@ export interface EditorSnapshot {
 const EMPTY: EditorSnapshot = {
   bold: false, italic: false, underline: false, strike: false, subscript: false, superscript: false, highlight: false,
   bulletList: false, orderedList: false, listType: null, blockquote: false, codeBlock: false, link: false,
-  align: "left", heading: 0, fontFamily: null, fontSize: null, color: null, lineHeight: null,
+  align: "left", heading: 0, fontFamily: null, fontSize: null, color: null, lineHeight: null, layout: DEFAULT_LAYOUT,
   canUndo: false, canRedo: false, inTable: false, hasSelection: false, words: 0, characters: 0,
 };
 
@@ -53,6 +56,7 @@ export function useEditorSnapshot(editor: Editor | null): EditorSnapshot {
           bulletList: e.isActive("bulletList"), orderedList: e.isActive("orderedList"), listType: ((e.getAttributes("bulletList").listType ?? e.getAttributes("orderedList").listType) as string | undefined) ?? null, blockquote: e.isActive("blockquote"),
           codeBlock: e.isActive("codeBlock"), link: e.isActive("link"),
           align: alignAttr, heading: level as EditorSnapshot["heading"],
+          layout: cleanLayout({ ...(e.state.selection.$from.parent.attrs as object) }),
           fontFamily: ts.fontFamily ?? null, fontSize: ts.fontSize ?? null, color: ts.color ?? null, lineHeight: ts.lineHeight ?? null,
           canUndo: e.can().undo(), canRedo: e.can().redo(), inTable: e.isActive("table"),
           hasSelection: !e.state.selection.empty,

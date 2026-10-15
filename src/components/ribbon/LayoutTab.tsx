@@ -2,8 +2,12 @@ import { Columns2, FileDown, Ruler, RectangleHorizontal, RectangleVertical, Rows
 import { type Orientation, type PageSetup, type PageSize } from "../../state/types";
 import { MARGIN_PRESETS, PAPER_SIZES, baseMarginsCm, fitMargins, formatCm, formatSize, isMirrored } from "../../state/page";
 import { useApp } from "../../state/store";
+import { useSections } from "../../editor/useSections";
 import { useLomaEditor } from "../../editor/EditorProvider";
 import { useEditorSnapshot } from "../../editor/useEditorSnapshot";
+import { DEFAULT_WATERMARK, WATERMARK_PRESETS, type Watermark } from "../../editor/watermark";
+import { NumberField } from "../ui/NumberField";
+import { MAX_INDENT_CM, MAX_SPACE_PT, type ParagraphLayout } from "../../editor/ParagraphFormat";
 import { RibbonButton } from "../ui/RibbonButton";
 import { DropdownButton } from "../ui/Dropdown";
 import { RibbonGroup } from "./RibbonParts";
@@ -21,19 +25,26 @@ export function LayoutTab() {
   const { state, set } = useApp();
   const editor = useLomaEditor();
   const snap = useEditorSnapshot(editor);
-  const { page } = state;
+  const { sections, current, section } = useSections(editor, state.page, state.headerFooter);
+  const page = section.page; // the paper and margins of the section holding the caret
   // A new paper or orientation keeps the margins whenever the text area stays usable; otherwise they shrink to fit.
-  const update = (patch: Partial<PageSetup>) => set((s) => ({ page: fitMargins({ ...s.page, ...patch }), doc: { ...s.doc, dirty: true } }));
-  const setPreset = (m: (typeof MARGIN_PRESETS)[number]["id"]) =>
-    set((s) => {
-      const { customMarginsCm: _c, mirrored: _m, ...rest } = s.page;
-      return { page: fitMargins({ ...rest, margins: m }), doc: { ...s.doc, dirty: true } };
-    });
+  // Changes apply to the section holding the caret (the first section is stored with the document, the others in their break).
+  const writePage = (next: PageSetup) => {
+    if (current === 0) set((s) => ({ page: next, doc: { ...s.doc, dirty: true } }));
+    else editor?.commands.setSectionPage(current, next);
+  };
+  const update = (patch: Partial<PageSetup>) => writePage(fitMargins({ ...page, ...patch }));
+  const setPreset = (m: (typeof MARGIN_PRESETS)[number]["id"]) => {
+    const { customMarginsCm: _c, mirrored: _m, ...rest } = page;
+    writePage(fitMargins({ ...rest, margins: m }));
+  };
   const activePaper = page.size;
+  const setWatermark = (w: Watermark | null) => set((s) => ({ watermark: w, doc: { ...s.doc, dirty: true } }));
+  const layout = (patch: Partial<ParagraphLayout>) => { editor?.chain().focus().setParagraphLayout(patch).run(); set((s) => ({ doc: { ...s.doc, dirty: true } })); };
 
   return (
     <>
-      <RibbonGroup label="Mise en page">
+      <RibbonGroup label={sections.length > 1 ? `Mise en page · section ${current + 1}/${sections.length}` : "Mise en page"}>
         <DropdownButton
           icon={Ruler}
           size="lg"
@@ -66,18 +77,46 @@ export function LayoutTab() {
             { label: "Autres formats de papier…", checked: activePaper === "Custom", shortcut: activePaper === "Custom" && page.customSizeCm ? formatSize(page.customSizeCm.width, page.customSizeCm.height) : undefined, onSelect: () => set({ dialog: "paper" }) },
           ]}
         />
-        <RibbonButton icon={Columns2} size="lg" label="Colonnes" soon />
-        <RibbonButton icon={ScissorsLineDashed} size="lg" label="Sauts" soon />
+        <RibbonButton icon={Columns2} size="lg" label="Colonnes" disabled title="Colonnes : non prises en charge — la pagination travaille sur une seule colonne (utilisez un tableau sans bordure pour une mise en page en colonnes)" />
+        <DropdownButton
+          icon={ScissorsLineDashed}
+          size="lg"
+          label="Sauts"
+          items={[
+            { label: "Saut de page", shortcut: "Ctrl+Entrée", onSelect: () => editor?.chain().focus().insertPageBreak().run() },
+            { label: "Saut de section (page suivante)", onSelect: () => editor?.chain().focus().insertSectionBreak().run() },
+            { separator: true as const },
+            { label: "Saut de page avant ce paragraphe", checked: snap.layout.pageBreakBefore, onSelect: () => editor?.chain().focus().setParagraphLayout({ pageBreakBefore: !snap.layout.pageBreakBefore }).run() },
+            { label: "Garder avec le paragraphe suivant", checked: snap.layout.keepWithNext, onSelect: () => editor?.chain().focus().setParagraphLayout({ keepWithNext: !snap.layout.keepWithNext }).run() },
+            { label: "Garder les lignes ensemble", checked: snap.layout.keepLines, onSelect: () => editor?.chain().focus().setParagraphLayout({ keepLines: !snap.layout.keepLines }).run() },
+          ]}
+        />
       </RibbonGroup>
-      <RibbonGroup label="Espacement">
+      <RibbonGroup label="Paragraphe">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          <NumberField label="Gauche" unit="cm" value={snap.layout.indentLeft} min={0} max={MAX_INDENT_CM} step={0.25} title="Retrait à gauche" onCommit={(v) => layout({ indentLeft: v })} />
+          <NumberField label="Avant" unit="pt" value={snap.layout.spaceBefore} placeholder="auto" min={0} max={MAX_SPACE_PT} step={6} title="Espacement avant le paragraphe" onCommit={(v) => layout({ spaceBefore: v })} />
+          <NumberField label="Droite" unit="cm" value={snap.layout.indentRight} min={0} max={MAX_INDENT_CM} step={0.25} title="Retrait à droite" onCommit={(v) => layout({ indentRight: v })} />
+          <NumberField label="Après" unit="pt" value={snap.layout.spaceAfter} placeholder="auto" min={0} max={MAX_SPACE_PT} step={6} title="Espacement après le paragraphe" onCommit={(v) => layout({ spaceAfter: v })} />
+        </div>
         <div className="flex flex-col items-center">
           <LineSpacingPicker icon={Rows3} editor={editor} snap={snap} />
           <span className="text-[11px]">Interligne</span>
         </div>
-        <RibbonButton icon={StretchHorizontal} size="lg" label="Retraits" soon />
+        <RibbonButton icon={StretchHorizontal} size="lg" label="Paragraphe…" title="Retraits, espacement et enchaînements (première ligne, suspendu…)" onClick={() => set({ dialog: "paragraph" })} />
       </RibbonGroup>
       <RibbonGroup label="Arrière-plan">
-        <RibbonButton icon={FileDown} size="lg" label="Filigrane" soon />
+        <DropdownButton
+          icon={FileDown}
+          size="lg"
+          label="Filigrane"
+          items={[
+            ...WATERMARK_PRESETS.map((t) => ({ label: t, checked: state.watermark?.text === t, onSelect: () => setWatermark({ ...(state.watermark ?? DEFAULT_WATERMARK), text: t }) })),
+            { separator: true as const },
+            { label: "Filigrane personnalisé…", onSelect: () => set({ dialog: "watermark" }) },
+            { label: "Supprimer le filigrane", disabled: !state.watermark, onSelect: () => setWatermark(null) },
+          ]}
+        />
       </RibbonGroup>
     </>
   );

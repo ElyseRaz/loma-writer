@@ -30,9 +30,11 @@ export function collectAtoms(view: EditorView, origin: number, scale: number): M
   const atoms: Atom[] = [];
   const refs: AtomRef[] = [];
 
+  let sectionCounter = 0;
   view.state.doc.descendants((node, pos) => {
     const name = node.type.name;
     let kind: AtomKind | null = null;
+    if (name === "sectionBreak") kind = "section";
     if (TEXT_BLOCKS.has(name)) kind = "text";
     else if (name === "tableRow") kind = "row";
     else if (name === "horizontalRule") kind = "block";
@@ -45,7 +47,7 @@ export function collectAtoms(view: EditorView, origin: number, scale: number): M
     if (el instanceof HTMLElement) {
       const r = el.getBoundingClientRect();
       const ref: AtomRef = { kind, pos, el, columns: 1, headers: [], lineStarts: [] };
-      const atom: Atom = { kind, top: (r.top - origin) / scale, bottom: (r.bottom - origin) / scale, keepWithNext: name === "heading" };
+      const atom: Atom = { kind, ...(kind === "section" ? { section: ++sectionCounter } : {}), top: (r.top - origin) / scale, bottom: (r.bottom - origin) / scale, keepWithNext: name === "heading" || (kind === "text" && !!node.attrs.keepWithNext), ...(kind === "text" && node.attrs.pageBreakBefore ? { breakBefore: true } : {}), ...(kind === "text" && node.attrs.keepLines ? { keepLines: true } : {}) };
       if (kind === "row") ref.columns = Array.from((el as HTMLTableRowElement).cells ?? []).reduce((s, c) => s + (c.colSpan || 1), 0) || 1;
       if (kind === "row") {
         const headers = headerRowsAbove(el as HTMLTableRowElement);

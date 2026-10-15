@@ -1,4 +1,4 @@
-import { EditorContent } from "@tiptap/react";
+import { EditorContent, useEditorState } from "@tiptap/react";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { CellSelection } from "@tiptap/pm/tables";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -6,10 +6,12 @@ import { applyFormat } from "../../editor/formatPainter";
 import { useCommandMap } from "../../editor/commands";
 import { useLomaEditor } from "../../editor/EditorProvider";
 import { useEditorSnapshot } from "../../editor/useEditorSnapshot";
-import { hasContent, reserveFor, sectionFor } from "../../pagination/headerFooter";
+import { hasContent, reserveFor } from "../../pagination/headerFooter";
 import { pageGeometry } from "../../pagination/model";
 import { requestPagination, setPaginationInputs } from "../../pagination/extension";
-import { usePageInfo } from "../../pagination/usePagination";
+import { usePageInfo, usePaginationSheets } from "../../pagination/usePagination";
+import type { Sheet } from "../../pagination/model";
+import { buildSections, readSectionBreaks, readSections, sectionIndexAt, type SectionInfo } from "../../editor/Sections";
 import { stylesCss } from "../../editor/docStyles";
 import { useApp } from "../../state/store";
 import { ContextMenu, type MenuEntry } from "../ui/Menu";
@@ -38,20 +40,39 @@ export function DocumentCanvas() {
   const { state, set } = useApp();
   const [menu, setMenu] = useState<Anchor | null>(null);
 
-  // Pagination works on logical page geometry; zoom only scales the rendering.
-  const section = useMemo(() => sectionFor(state.page, state.headerFooter), [state.page, state.headerFooter]);
-  // The room reserved for a header/footer follows its measured height (one line until measured).
-  const [hf, setHf] = useState<HeaderFooterHeights>({ header: 20, footer: 20 });
-  const geometry = useMemo(
-    () => pageGeometry(state.page, hasContent(state.headerFooter.header) ? reserveFor(hf.header) : 0, hasContent(state.headerFooter.footer) ? reserveFor(hf.footer) : 0),
-    [state.page, state.headerFooter, hf.header, hf.footer],
+  // Pagination works on logical page geometry; zoom only scales the rendering. A document has one or more sections, each with
+  // its own paper, margins, headers and footers: the document's own setup is the first section, every section break the next one.
+  const breaks = useEditorState({ editor, selector: ({ editor: e }) => (e ? readSectionBreaks(e.state.doc) : []) }) ?? [];
+  const sections = useMemo(() => buildSections(breaks, state.page, state.headerFooter), [breaks, state.page, state.headerFooter]);
+  // The room reserved for a header/footer follows its measured height (one line until measured), per section.
+  const [hfs, setHfs] = useState<HeaderFooterHeights[]>([]);
+  const geometries = useMemo(
+    () => sections.map((s, i) => pageGeometry(s.page, hasContent(s.hf.header) ? reserveFor(hfs[i]?.header ?? 20) : 0, hasContent(s.hf.footer) ? reserveFor(hfs[i]?.footer ?? 20) : 0)),
+    [sections, hfs],
   );
+  const geometry = geometries[0];
   const scale = state.zoom / 100;
   const { total } = usePageInfo(editor, geometry.pitch);
+  const engineSheets = usePaginationSheets(editor);
+  // Sheets in stack coordinates. Before the first layout there is one geometry and `total` pages.
+  const sheets: Sheet[] = useMemo(() => {
+    if (engineSheets.length) return engineSheets;
+    const g = geometry;
+    return Array.from({ length: total }, (_, i) => ({ top: i * g.pitch - g.insetTop, left: 0, width: g.width, height: g.height, insetTop: g.insetTop, insetBottom: g.insetBottom, insetLeft: g.insetLeft, insetRight: g.insetRight, section: 0, indexInSection: i }));
+  }, [engineSheets, geometry, total]);
+  const maxWidth = Math.max(...geometries.map((g) => g.width));
+  const sheetTops = useMemo(() => { let y = 0; return sheets.map((s) => { const top = y; y += s.height + geometry.gap; return top; }); }, [sheets, geometry.gap]);
+  const current = useEditorState({ editor, selector: ({ editor: e }) => (e ? sectionIndexAt(e.state.doc, e.state.selection.from) : 0) }) ?? 0;
+  const here = geometries[Math.min(current, geometries.length - 1)];
 
   useEffect(() => {
-    if (editor) setPaginationInputs(editor, geometry, scale);
-  }, [editor, geometry, scale]);
+    if (editor) setPaginationInputs(editor, geometries, scale);
+  }, [editor, geometries, scale]);
+  // The commands (insert a section break…) need the document-level setup to resolve sections.
+  useEffect(() => {
+    if (!editor) return;
+    (editor.storage as unknown as { sectionBreak: { current: () => SectionInfo[] } }).sectionBreak.current = () => readSections(editor.state.doc, state.page, state.headerFooter);
+  }, [editor, state.page, state.headerFooter]);
 
   // The editor is hidden behind the backstage: measure again as soon as it is visible.
   useEffect(() => {
@@ -66,7 +87,7 @@ export function DocumentCanvas() {
       style.id = "loma-print-page";
       document.head.appendChild(style);
     }
-    style.textContent = `@page { size: ${geometry.width}px ${geometry.height}px; margin: 0; }`;
+    style.textContent = `@page { size: ${geometry.width}px ${geometry.height}px; margin: 0; }`; // one size for the whole print job
   }, [geometry.width, geometry.height]);
 
   // A click on the sheet (margins, between pages, the grey around them) or on text releases the selected picture, shape or table.
@@ -167,7 +188,7 @@ export function DocumentCanvas() {
     item("edit.selectAll"),
   ];
 
-  const stackHeight = total * geometry.pitch - geometry.gap;
+  const stackHeight = sheets.length ? sheetTops[sheetTops.length - 1] + sheets[sheets.length - 1].height : geometry.height;
 
   // Zoom is a paint-only transform: the layout (and so the pagination) stays at 100 %, whatever the zoom.
   // The wrapper reserves the scaled size so scrolling and centering work.
@@ -184,7 +205,7 @@ export function DocumentCanvas() {
 
   return (
     <div className="relative min-w-0 flex-1 overflow-auto bg-canvas [scrollbar-gutter:stable]" data-canvas>
-      {state.ruler && <Ruler pageWidth={geometry.width} marginLeft={geometry.insetLeft} marginRight={geometry.insetRight} zoom={state.zoom} />}
+      {state.ruler && <Ruler pageWidth={here.width} marginLeft={here.insetLeft} marginRight={here.insetRight} zoom={state.zoom} />}
       {editor && snap.inTable && <TableToolbar editor={editor} />}
       {editor && <TableInsertHandles editor={editor} />}
       {editor && <TableMoveHandle editor={editor} />}
@@ -192,17 +213,18 @@ export function DocumentCanvas() {
       <DocStylesCss />
       {editor && <ShapeToolbar editor={editor} />}
       <div className="flex w-max min-w-full justify-center px-8 py-6">
-        <div className="page-wrap relative shrink-0" style={{ width: geometry.width * scale, height: Math.max(stackHeight, contentHeight) * scale }}>
-        <div ref={stackRef} className="page-stack absolute left-0 top-0 origin-top-left" style={{ width: geometry.width, minHeight: stackHeight, transform: `scale(${scale})`, ["--doc-font" as string]: state.prefs.fontFamily, ["--doc-size" as string]: `${state.prefs.fontSizePt}pt` }} data-pages={total} data-pitch={geometry.pitch} data-inset-left={geometry.insetLeft} data-inset-top={geometry.insetTop}>
-          <PageSheets bounds={state.textBounds} pages={total} geometry={geometry} section={section} onHeights={(h) => setHf((cur) => (cur.header === h.header && cur.footer === h.footer ? cur : h))} />
+        <div className="page-wrap relative shrink-0" style={{ width: maxWidth * scale, height: Math.max(stackHeight, contentHeight) * scale }}>
+        <div ref={stackRef} className="page-stack absolute left-0 top-0 origin-top-left" style={{ width: maxWidth, minHeight: stackHeight, transform: `scale(${scale})`, ["--doc-font" as string]: state.prefs.fontFamily, ["--doc-size" as string]: `${state.prefs.fontSizePt}pt` }} data-pages={sheets.length} data-pitch={geometry.pitch} data-inset-left={geometry.insetLeft} data-inset-top={geometry.insetTop} data-sheets={JSON.stringify(sheets.map((s, i) => [Math.round(sheetTops[i] * 100) / 100, s.left, s.width, s.height]))}>
+          <PageSheets bounds={state.textBounds} watermark={state.watermark} sheets={sheets} sections={sections} geometries={geometries} onHeights={(i, h) => setHfs((cur) => (cur[i] && cur[i].header === h.header && cur[i].footer === h.footer ? cur : Object.assign([...cur], { [i]: h })))} />
           <div
             className={`paper relative${state.marks ? " show-marks" : ""}${state.bookmarks ? "" : " hide-bookmarks"}${painter ? " painter-armed" : ""}`}
             onMouseUp={onMouseUp}
             style={
               {
-                width: geometry.width,
+                width: maxWidth,
                 minHeight: stackHeight,
-                padding: `${geometry.insetTop}px ${geometry.insetRight}px ${geometry.insetBottom}px ${geometry.insetLeft}px`,
+                // Left and right margins are per block (their section's), see sectionMargins in the pagination.
+                padding: `${geometry.insetTop}px 0 ${geometries[geometries.length - 1].insetBottom}px 0`,
                 "--doc-font": state.prefs.fontFamily,
                 "--doc-size": `${state.prefs.fontSizePt}pt`,
               } as React.CSSProperties

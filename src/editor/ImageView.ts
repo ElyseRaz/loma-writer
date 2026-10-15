@@ -1,3 +1,4 @@
+import { placeInSheets, sheetIndexAt, stackSheets } from "../pagination/pageLayout";
 import type { Editor } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection } from "@tiptap/pm/state";
@@ -219,9 +220,8 @@ export function pictureView({ node: initial, getPos, editor }: { node: PMNode; g
   /** Moving makes the picture free (in front of the text, positioned on the page) and lets it follow the pointer over the whole page. */
   const startMove = (e: MouseEvent, threshold: number) => {
     const stack = anchor.closest<HTMLElement>(".page-stack");
-    const pitch = Number(stack?.dataset.pitch) || 0;
     const pos0 = getPos();
-    if (!stack || !pitch || pos0 === undefined) return;
+    if (!stack || !(Number(stack.dataset.pitch) > 0) || pos0 === undefined) return;
     const a0 = attrs();
     const { w, h } = dims(a0);
     const s = stack.getBoundingClientRect();
@@ -229,17 +229,12 @@ export function pictureView({ node: initial, getPos, editor }: { node: PMNode; g
     const r = box.getBoundingClientRect();
     const absX0 = (r.left + r.width / 2 - s.left) / scale - w / 2;
     const absY0 = (r.top + r.height / 2 - s.top) / scale - h / 2;
-    const pageW = stack.offsetWidth;
-    const anchorPage = Math.max(0, Math.floor(((anchor.getBoundingClientRect().top - s.top) / scale + 1) / pitch));
+    const sheets = stackSheets(stack);
+    const anchorPage = sheetIndexAt(sheets, (anchor.getBoundingClientRect().top - s.top) / scale);
     const startX = e.clientX, startY = e.clientY;
     let started = false;
     let pos = { x: absX0, y: absY0 };
-    const place = () => {
-      const sheet = stack.querySelector<HTMLElement>(".page-sheet");
-      const pages = Number(stack.dataset.pages) || 1;
-      const maxY = sheet ? (pages - 1) * pitch + sheet.offsetHeight - h : Infinity;
-      return { x: Math.round(Math.min(Math.max(pos.x, 0), Math.max(0, pageW - w))), y: Math.round(Math.min(Math.max(pos.y, 0), Math.max(0, maxY))) };
-    };
+    const place = () => placeInSheets(sheets, pos.x, pos.y, w, h);
     const wrapNow = a0.wrap === "behind" ? "behind" : "front";
     const onMoveEv = (ev: MouseEvent) => {
       if (!started && Math.hypot(ev.clientX - startX, ev.clientY - startY) < threshold) return;
@@ -247,7 +242,7 @@ export function pictureView({ node: initial, getPos, editor }: { node: PMNode; g
       ev.preventDefault();
       pos = { x: absX0 + (ev.clientX - startX) / scale, y: absY0 + (ev.clientY - startY) / scale };
       const p = place();
-      layout({ ...a0, wrap: wrapNow, anchor: "page", x: p.x, y: p.y - anchorPage * pitch });
+      layout({ ...a0, wrap: wrapNow, anchor: "page", x: p.ax - sheets[anchorPage].left, y: p.ay - sheets[anchorPage].top });
       box.classList.add("img-dragging");
     };
     const up = () => {
@@ -258,8 +253,8 @@ export function pictureView({ node: initial, getPos, editor }: { node: PMNode; g
       if (cur === undefined) return;
       if (!started) { editor.commands.setNodeSelection(cur); editor.view.focus(); return; } // a plain click selects the picture
       const p = place();
-      const targetPage = Math.max(0, Math.floor((p.y + 1) / pitch));
-      const next = cleanPicture({ wrap: wrapNow, anchor: "page", x: p.x, y: p.y - targetPage * pitch }, a0);
+      const targetPage = p.page;
+      const next = cleanPicture({ wrap: wrapNow, anchor: "page", x: p.x, y: p.y }, a0);
       const tr = editor.state.tr;
       if (targetPage !== anchorPage) {
         // Dropped on another page: the picture moves into a paragraph of that page so it stays there when the text reflows.
@@ -267,7 +262,7 @@ export function pictureView({ node: initial, getPos, editor }: { node: PMNode; g
         editor.state.doc.forEach((n, off) => {
           if (at >= 0 || !n.isTextblock) return;
           const dom = editor.view.nodeDOM(off);
-          if (dom instanceof HTMLElement && (dom.getBoundingClientRect().top - s.top) / scale >= targetPage * pitch - 2) at = off + 1;
+          if (dom instanceof HTMLElement && (dom.getBoundingClientRect().top - s.top) / scale >= sheets[targetPage].top - 2) at = off + 1;
         });
         const size = node.nodeSize;
         if (at >= 0 && !(at > cur && at <= cur + size)) {

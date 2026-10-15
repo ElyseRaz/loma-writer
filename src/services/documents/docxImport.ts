@@ -1,3 +1,5 @@
+import { cleanWatermark, type Watermark } from "../../editor/watermark";
+import type { ParagraphLayout } from "../../editor/ParagraphFormat";
 import { builtinStyle, cleanStyles, STYLE_IDS, type DocStyles, type StyleDef as EditedStyle, type StyleId } from "../../editor/docStyles";
 import { bulletFromChar, numberFromFormat } from "./listFormats";
 import JSZip from "jszip";
@@ -44,6 +46,8 @@ interface Ctx {
   docPPr?: Element | null;
   /** Default font of the document (`w:rPrDefault`). */
   docFont?: string | null;
+  /** Section breaks to emit after the paragraphs that end a section (body only); consumed in order. */
+  sectionNodes?: PM[];
 }
 
 const on = (el: Element | null): boolean => {
@@ -557,11 +561,29 @@ function convertParagraph(ctx: Ctx, p: Element): ParaInfo {
     const v = attr(child(bdr, tag), "w:val");
     if (v && v !== "none" && v !== "nil") borders[side] = true;
   }
-  const deco = { shading: fill && fill !== "auto" && /^[0-9a-f]{6}$/i.test(fill) ? `#${fill.toLowerCase()}` : null, borders: Object.keys(borders).length ? borders : null };
+  // Direct indents, spacing and page-flow options (indents in a list belong to the list's numbering).
+  const layout: Partial<ParagraphLayout> = {};
+  if (pPr) {
+    const ind = child(pPr, "w:ind");
+    const tw = (...names: string[]) => { for (const n of names) { const v = ind?.getAttribute(n); if (v !== null && v !== undefined && v !== "") return +v / 567; } return null; };
+    if (!list) {
+      const l = tw("w:left", "w:start"), r = tw("w:right", "w:end"), f = tw("w:firstLine"), h = tw("w:hanging");
+      if (l) layout.indentLeft = l;
+      if (r) layout.indentRight = r;
+      if (f) layout.firstLine = f; else if (h) layout.firstLine = -h;
+    }
+    const spc = child(pPr, "w:spacing");
+    const bef = spc?.getAttribute("w:before"), aft = spc?.getAttribute("w:after");
+    if (bef) layout.spaceBefore = +bef / 20;
+    if (aft) layout.spaceAfter = +aft / 20;
+    if (child(pPr, "w:pageBreakBefore")) layout.pageBreakBefore = on(child(pPr, "w:pageBreakBefore"));
+    if (child(pPr, "w:keepNext")) layout.keepWithNext = on(child(pPr, "w:keepNext"));
+    if (child(pPr, "w:keepLines")) layout.keepLines = on(child(pPr, "w:keepLines"));
+  }
+  const deco = { shading: fill && fill !== "auto" && /^[0-9a-f]{6}$/i.test(fill) ? `#${fill.toLowerCase()}` : null, borders: Object.keys(borders).length ? borders : null, layout };
 
   // Manual page breaks and shapes split the paragraph into blocks.
   const nodes: PM[] = [];
-  if (pPr && child(pPr, "w:pageBreakBefore")) nodes.push({ type: "pageBreak" });
   let current: PM[] = [];
   const floating: PM[] = []; // free shapes anchored here: they come before the paragraph, which is not split
   let firstBlock = true;
@@ -636,6 +658,21 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
   const visit = (el: Element) => {
     switch (el.nodeName) {
       case "w:p": {
+        // The empty paragraph Word (and the docx library) use only to carry a section's properties is not content.
+        const sect = container.nodeName === "w:body" && !!child(child(el, "w:pPr") ?? el, "w:sectPr");
+        const carrier = sect && !el.textContent?.trim() && !["w:drawing", "w:pict", "w:br", "m:oMath", "w:object"].some((t) => el.getElementsByTagName(t).length);
+        if (!carrier) paragraph(el);
+        // A paragraph carrying a section's properties ends that section: the break (with the next section's setup) follows it.
+        if (sect && ctx.sectionNodes?.length) { flush(); lists.close(); out.push(ctx.sectionNodes.shift()!); }
+        return;
+      }
+      case "w:tbl": flush(); lists.close(); out.push(convertTable(ctx, el)); return;
+      case "w:sdt": case "w:sdtContent": case "w:customXml": kids(el).forEach(visit); return;
+    }
+  };
+  const paragraph = (el: Element) => {
+    {
+      {
         const { nodes, kind, list } = convertParagraph(ctx, el);
         if (nodes.length !== 1 || nodes[0].type === "pageBreak") { flush(); lists.close(); out.push(...nodes); return; }
         const node = nodes[0];
@@ -653,8 +690,6 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
         } else { flush(); out.push(node); }
         return;
       }
-      case "w:tbl": flush(); lists.close(); out.push(convertTable(ctx, el)); return;
-      case "w:sdt": case "w:sdtContent": case "w:customXml": kids(el).forEach(visit); return;
     }
   };
   kids(container).forEach(visit);
@@ -691,6 +726,29 @@ async function readHeadersFooters(ctx: Ctx, sectPr: Element, text: (path: string
   return clean;
 }
 
+const VML_COLORS: Record<string, string> = { silver: "#c0c0c0", gray: "#808080", grey: "#808080", black: "#000000", red: "#ff0000", blue: "#0000ff", green: "#008000", orange: "#ffa500", lightgray: "#d3d3d3", darkgray: "#a9a9a9", white: "#ffffff", yellow: "#ffff00", purple: "#800080" };
+
+/** A text watermark: Word's PowerPlusWaterMarkObject (a VML WordArt shape) in a header part. */
+async function readWatermark(zip: JSZip): Promise<Watermark | null> {
+  for (const name of Object.keys(zip.files).filter((f) => /^word\/header\d*\.xml$/.test(f))) {
+    const xml = await zip.file(name)!.async("string");
+    const shape = /<v:shape\b[^>]*>[\s\S]*?<\/v:shape>/.exec(xml)?.[0];
+    if (!shape || !/textpath/.test(shape)) continue;
+    const str = /<v:textpath\b[^>]*\bstring="([^"]*)"/.exec(shape)?.[1];
+    if (!str) continue;
+    const fill = /\bfillcolor="([^"]*)"/.exec(shape)?.[1]?.trim().toLowerCase() ?? "silver";
+    const color = /^#[0-9a-f]{6}$/.test(fill) ? fill : VML_COLORS[fill.replace(/\s.*/, "")] ?? "#c0c0c0";
+    const op = /<v:fill\b[^>]*\bopacity="([^"]*)"/.exec(shape)?.[1];
+    const opacity = op ? (op.endsWith("f") ? parseFloat(op) / 65536 : parseFloat(op)) : 1;
+    const style = /\bstyle="([^"]*)"/.exec(shape)?.[1] ?? "";
+    const rotation = parseFloat(/rotation:\s*(-?[\d.]+)/.exec(style)?.[1] ?? "0");
+    const height = parseFloat(/height:\s*([\d.]+)pt/.exec(style)?.[1] ?? "88");
+    const unescape = (s: string) => s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+    return cleanWatermark({ text: unescape(str), color, size: Math.round(Math.min(+(/\balt="loma-size:(\d+)"/.exec(shape)?.[1] ?? height / 1.1), 250)), layout: rotation && Math.abs(rotation % 360) > 10 ? "diagonal" : "horizontal", opacity: Number.isFinite(opacity) ? opacity : 0.5 });
+  }
+  return null;
+}
+
 export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   let zip: JSZip;
   try {
@@ -723,26 +781,49 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   const doc = parseXml(docXml, "document.xml");
   const body = first(doc, "w:body");
   if (!body) throw corrupt("corps du document absent");
-  const blocks = convertBlocks(ctx, body);
-
-  // Page setup from the last section.
-  const sectPr = child(body, "w:sectPr") ?? Array.from(doc.getElementsByTagName("w:sectPr")).pop() ?? null;
-  const sz = sectPr ? child(sectPr, "w:pgSz") : null;
-  const mar = sectPr ? child(sectPr, "w:pgMar") : null;
-  let w = +(sz?.getAttribute("w:w") ?? 11906) / 15;
-  let h = +(sz?.getAttribute("w:h") ?? 16838) / 15;
-  if (sz?.getAttribute("w:orient") === "landscape" && w < h) [w, h] = [h, w];
-  const twip = (name: string) => +(mar?.getAttribute(name) ?? 1440) / 15;
+  // Sections: every `w:sectPr` (those of the paragraphs that end a section, then the body's own) is one section.
   const settings = await text("word/settings.xml");
   const mirrored = !!settings && /<w:mirrorMargins\b(?![^>]*w:val="(?:0|false|off)")/.test(settings);
   const gutterTop = !!settings && /<w:gutterAtTop\b(?![^>]*w:val="(?:0|false|off)")/.test(settings);
-  const gutterPx = mar ? +(mar.getAttribute("w:gutter") ?? 0) / 15 : 0;
-  const page = pageFromDimensions(w, h, mar ? { top: twip("w:top"), right: twip("w:right"), bottom: twip("w:bottom"), left: twip("w:left") } : null, warnings, { mirrored, gutterPx, gutterTop });
+  const sectPrs = Array.from(doc.getElementsByTagName("w:sectPr"));
+  const sectInfo = (sectPr: Element | null) => {
+    const sz = sectPr ? child(sectPr, "w:pgSz") : null;
+    const mar = sectPr ? child(sectPr, "w:pgMar") : null;
+    let w = +(sz?.getAttribute("w:w") ?? 11906) / 15;
+    let h = +(sz?.getAttribute("w:h") ?? 16838) / 15;
+    if (sz?.getAttribute("w:orient") === "landscape" && w < h) [w, h] = [h, w];
+    const twip = (name: string) => +(mar?.getAttribute(name) ?? 1440) / 15;
+    const gutterPx = mar ? +(mar.getAttribute("w:gutter") ?? 0) / 15 : 0;
+    return {
+      w,
+      margins: { top: mar ? twip("w:top") : 96, left: mar ? twip("w:left") : 96, right: mar ? twip("w:right") : 96 },
+      page: pageFromDimensions(w, h, mar ? { top: twip("w:top"), right: twip("w:right"), bottom: twip("w:bottom"), left: twip("w:left") } : null, warnings, { mirrored, gutterPx, gutterTop }),
+    };
+  };
+  const infos = (sectPrs.length ? sectPrs : [null]).map(sectInfo);
+  // Headers and footers of each section; a section that defines none (or only a header, only a footer) takes the previous ones.
+  const hfRaw = await Promise.all((sectPrs.length ? sectPrs : []).map((sp) => readHeadersFooters(ctx, sp, text)));
+  const resolved: HeaderFooterSettings[] = [];
+  hfRaw.forEach((raw, i) => {
+    const prev = resolved[i - 1] ?? { header: {}, footer: {}, titlePage: false, evenOdd: false };
+    const any = (s: HeaderFooterSet) => !!(s.default || s.first || s.even);
+    resolved.push(raw ? { header: any(raw.header) ? raw.header : prev.header, footer: any(raw.footer) ? raw.footer : prev.footer, titlePage: raw.titlePage || (i > 0 && !raw && prev.titlePage), evenOdd: raw.evenOdd } : prev);
+  });
+  if (sectPrs.some((sp, i) => i > 0 && attr(child(sp, "w:type"), "w:val") === "continuous")) warnings.add("Sauts de section « continu » : remplacés par des sauts de section avec page suivante.");
+  // The break before section k carries the setup of section k.
+  ctx.sectionNodes = infos.slice(1).map((info, k) => {
+    const hf = resolved[k + 1];
+    const linked = !hf || JSON.stringify(hf) === JSON.stringify(resolved[k]);
+    return { type: "sectionBreak", attrs: { page: info.page, hf: linked ? null : hf } };
+  });
+  const blocks = convertBlocks(ctx, body);
+  // Sections announced by the file but whose ending paragraph was not found (inside a table, say): they follow at the end.
+  while (ctx.sectionNodes.length) blocks.push(ctx.sectionNodes.shift()!, paragraph([]));
 
-  resolvePlacements(blocks, w, { top: mar ? +(mar.getAttribute("w:top") ?? 1440) / 15 : 96, left: mar ? +(mar.getAttribute("w:left") ?? 1440) / 15 : 96, right: mar ? +(mar.getAttribute("w:right") ?? 1440) / 15 : 96 });
+  const page = infos[0].page;
+  resolvePlacements(blocks, infos[0].w, infos[0].margins);
 
-  // Headers and footers (first line of text, with page-number fields).
-  const headerFooter = sectPr ? await readHeadersFooters(ctx, sectPr, text) : undefined;
+  const headerFooter = resolved[0] && (resolved[0].header.default || resolved[0].header.first || resolved[0].header.even || resolved[0].footer.default || resolved[0].footer.first || resolved[0].footer.even) ? resolved[0] : undefined;
   const footnotes = await text("word/footnotes.xml");
   if (footnotes && Array.from(parseXml(footnotes, "footnotes.xml").getElementsByTagName("w:footnote")).some((f) => !f.getAttribute("w:type") && f.textContent?.trim()))
     warnings.add("Notes de bas de page : non prises en charge, ignorées.");
@@ -754,5 +835,6 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
     if (sourceHasContent) throw new DocumentError("unreadable-content", "Le contenu de ce document n'a pas pu être lu : il utilise des éléments que Loma Writer ne sait pas importer.");
   }
   const styles = readDocStyles(ctx);
-  return { model: { content: { type: "doc", content: ensureBlocks(blocks) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(styles).length ? { styles } : {}) }, warnings: [...warnings] };
+  const watermark = await readWatermark(zip);
+  return { model: { content: { type: "doc", content: ensureBlocks(blocks) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(styles).length ? { styles } : {}), ...(watermark ? { watermark } : {}) }, warnings: [...warnings] };
 }

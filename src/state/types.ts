@@ -54,7 +54,7 @@ export interface DocumentMeta {
   lossy: string[];
 }
 
-export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | null;
+export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "paragraph" | "watermark" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | null;
 
 export interface AppState {
   theme: ThemeMode;
@@ -74,6 +74,8 @@ export interface AppState {
   headerFooter: HeaderFooterSettings;
   /** Edited paragraph styles of the document (only the differences from the built-in look). */
   docStyles: DocStyles;
+  /** Watermark of the document, or null. */
+  watermark: import("../editor/watermark").Watermark | null;
   /** Style the style dialog opens on. */
   styleTarget: import("../editor/docStyles").StyleId;
   /** Which dialog variant is open: header or footer. */

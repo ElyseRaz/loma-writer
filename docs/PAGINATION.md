@@ -82,3 +82,44 @@ pagination mesure alors le texte réellement reformaté dans cette largeur et re
   écrite dans le fichier et appliquée par Word/LibreOffice) ; une seule section, donc une seule orientation par document (l'architecture
   `PageSetup` peut devenir par section, mais rien n'est simulé) ; `.doc` passe par la conversion de LibreOffice.
 - **Affichage** : repères d'angle de la zone de texte (Affichage > Limites du texte), non imprimés.
+
+## Onglet Mise en page : paragraphe, sauts, filigrane
+
+- **Retraits et espacement** (`src/editor/ParagraphFormat.ts`) : attributs de paragraphe `indentLeft`, `indentRight`, `firstLine`
+  (négatif = suspendu), `spaceBefore`, `spaceAfter`. Saisie en cm et en pt dans le ruban ou dans « Paragraphe… ». DOCX : `w:ind`,
+  `w:spacing before/after` ; ODT : `fo:margin-*`, `fo:text-indent`. Les retraits d'un paragraphe de liste appartiennent à la
+  numérotation (non importés ni écrits).
+- **Sauts** : « Saut de page avant », « Garder avec le paragraphe suivant », « Garder les lignes ensemble » sont lus par le moteur
+  (`Atom.breakBefore`, `keepWithNext`, `keepLines`) ; DOCX `w:pageBreakBefore/keepNext/keepLines`, ODT `fo:break-before`,
+  `fo:keep-with-next`, `fo:keep-together`. Un « saut de page avant » de Word est maintenant lu comme option du paragraphe
+  (et plus comme un saut séparé).
+- **Filigrane** (`src/editor/watermark.ts`) : texte, couleur, taille, diagonale ou horizontale, opacité ; dessiné derrière le texte
+  sur chaque page, imprimé. DOCX : forme VML `PowerPlusWaterMarkObject` dans l'en-tête (créé si besoin), relue à l'ouverture ;
+  vérifié avec LibreOffice (rendu PDF), pas avec Word. **ODT : non écrit** (avertissement à l'enregistrement).
+- **Colonnes : non prises en charge.** Le moteur paginé suit un seul flux vertical par page ; deux colonnes demandent de répartir
+  chaque page en deux zones de texte (même chantier que les sections, mais avec le texte lui-même à couper). Le bouton est désactivé
+  avec cette explication. Pas de saut de colonne.
+
+## Sections
+
+Un **saut de section (page suivante)** (Mise en page > Sauts) commence une nouvelle section sur une nouvelle page, avec son
+propre papier, orientation, marges, en-têtes et pieds de page.
+
+- **Modèle** : nœud `sectionBreak` (`src/editor/Sections.ts`) portant la mise en page de la section qui le suit (`page`) et ses
+  en-têtes/pieds (`hf`, `null` = identiques à la section précédente). La première section est décrite, comme avant, par la mise en
+  page du document ; `readSections()` résout l'héritage.
+- **Moteur** : `paginate(atoms, géométries[])` ; l'atome `section` change de géométrie et renvoie aussi les **feuilles** (position,
+  taille, marges de chaque page) : les pages n'ont plus la même hauteur ni le même pas. Le texte d'une section a la largeur de sa
+  feuille (marges gauche/droite portées par chaque bloc, variables CSS `--sec-l` / `--sec-r`).
+- **Affichage** : feuilles de tailles différentes (centrées), en-têtes et pieds propres à chaque section, filigrane et repères sur
+  chacune, règle et barre d'état suivant la section du curseur. Objets libres (formes, images, tableaux) placés par rapport à
+  la feuille où ils se trouvent (`src/pagination/pageLayout.ts`). Les menus Marges, Orientation et Taille agissent sur la section
+  du curseur ; la fenêtre « Mise en page » propose « cette section » ou « tout le document ». « En-tête » et « Pied de page » ont
+  « Identique à la section précédente ».
+- **Fichiers** : DOCX (`w:sectPr` par section, relues à l'ouverture ; héritage des en-têtes) et ODT (une page maître par section,
+  `style:master-page-name` sur le premier paragraphe) ; vérifié avec LibreOffice dans les deux sens (tailles de page, en-têtes).
+  Les sauts « continu » de Word sont lus comme des sauts de section avec page suivante (avertissement). `.doc` passe par LibreOffice.
+- **Limites** : un seul type de saut (page suivante : pas de continu, page paire/impaire) ; la numérotation des pages est continue
+  (pas de redémarrage par section) ; **l'impression utilise le format de la première section** (avertissement affiché si les sections
+  diffèrent) — pour un résultat exact avec plusieurs formats, enregistrer en DOCX/ODT et imprimer depuis Word ou LibreOffice ; les
+  formes d'un fichier DOCX/ODT sont positionnées d'après la mise en page de la première section.

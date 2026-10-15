@@ -4,6 +4,8 @@ import { cn } from "../../lib/cn";
 import {
   CUSTOM_SIZE_LIMITS, DEFAULT_CUSTOM_SIZE, MARGIN_PRESETS, MAX_MARGIN_CM, PAPER_SIZES, baseMarginsCm, effectiveMarginsCm, fitMargins, formatCm, formatSize, gutterOf, isMirrored, paperCm, validatePage,
 } from "../../state/page";
+import { useLomaEditor } from "../../editor/EditorProvider";
+import { useSections } from "../../editor/useSections";
 import { useApp } from "../../state/store";
 import type { MarginsCm, PageSetup, PageSize } from "../../state/types";
 import { Button, Dialog } from "../ui/Dialog";
@@ -52,8 +54,12 @@ function Preview({ page }: { page: PageSetup }) {
  */
 export function PageSetupDialog({ initialTab }: { initialTab: Tab }) {
   const { state, set } = useApp();
+  const editor = useLomaEditor();
+  // The setup being edited is the one of the section holding the caret; with several sections it can be applied to all of them.
+  const { sections, current } = useSections(editor, state.page, state.headerFooter);
+  const [scope, setScope] = useState<"section" | "all">("section");
   const [tab, setTab] = useState<Tab>(initialTab);
-  const [draft, setDraft] = useState<PageSetup>(state.page);
+  const [draft, setDraft] = useState<PageSetup>(sections[current].page);
   const problems = validatePage(draft);
   const bad = (f: string) => problems.some((p) => p.field === f);
   const base = baseMarginsCm(draft);
@@ -88,7 +94,11 @@ export function PageSetupDialog({ initialTab }: { initialTab: Tab }) {
     const next: PageSetup = draft.size === "Custom" ? { ...rest, customSizeCm } : rest;
     if (next.margins !== "custom") { delete next.customMarginsCm; delete next.mirrored; }
     if (!next.mirrored) delete next.mirrored;
-    set((s) => ({ page: next, doc: { ...s.doc, dirty: true }, dialog: null }));
+    const targets = scope === "all" ? sections.map((s) => s.index) : [current];
+    // Section 0 is the document's own setup; the others live in their break.
+    if (targets.includes(0)) set((s) => ({ page: next, doc: { ...s.doc, dirty: true } }));
+    targets.filter((i) => i > 0).forEach((i) => editor?.commands.setSectionPage(i, next));
+    set((s) => ({ dialog: null, doc: { ...s.doc, dirty: true } }));
   };
 
   const preset = draft.margins === "custom" ? "custom" : draft.margins;
@@ -102,6 +112,14 @@ export function PageSetupDialog({ initialTab }: { initialTab: Tab }) {
       <div className="grid gap-4 p-5 sm:grid-cols-[1fr_170px]">
         <div className="min-w-0 space-y-3">
           <div role="tablist" aria-label="Mise en page" className="flex gap-1.5">{tabBtn("margins", "Marges")}{tabBtn("paper", "Papier")}</div>
+          {sections.length > 1 && (
+            <label className={label}>Appliquer à
+              <select aria-label="Appliquer à" value={scope} onChange={(e) => setScope(e.target.value as "section" | "all")} className={cn(input, "mt-1 pr-2")}>
+                <option value="section">Cette section (section {current + 1})</option>
+                <option value="all">Tout le document ({sections.length} sections)</option>
+              </select>
+            </label>
+          )}
 
           {tab === "margins" && (
             <div className="space-y-3">

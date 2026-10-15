@@ -1,6 +1,7 @@
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { cleanPlace } from "./TableLook";
+import { sectionIndexAt } from "./Sections";
 
 const MIN_COL = 24;
 /** Space kept for each column that has no explicit width. */
@@ -20,13 +21,15 @@ export const TableFit = Extension.create({
         key: new PluginKey("loma-table-fit"),
         appendTransaction(trs, _old, state) {
           if (!trs.some((t) => t.docChanged)) return null;
-          const geom = (editor.storage as unknown as { pagination?: { geometry: { width: number; insetLeft: number; insetRight: number } | null } }).pagination?.geometry;
-          if (!geom) return null;
-          const textWidth = Math.floor(geom.width - geom.insetLeft - geom.insetRight);
+          const pag = (editor.storage as unknown as { pagination?: { geometry: { width: number; insetLeft: number; insetRight: number } | null; geometries?: Array<{ width: number; insetLeft: number; insetRight: number }> } }).pagination;
+          if (!pag?.geometry) return null;
           let tr = state.tr;
           let changed = false;
           state.doc.descendants((node, pos) => {
             if (node.type.name !== "table") return true;
+            // The width of the text area depends on the section the table is in.
+            const geom = pag.geometries?.[Math.min(sectionIndexAt(state.doc, pos), (pag.geometries?.length ?? 1) - 1)] ?? pag.geometry!;
+            const textWidth = Math.floor(geom.width - geom.insetLeft - geom.insetRight);
             const place = cleanPlace(node.attrs.place);
             const avail = place ? Math.min(place.w, geom.width - 16) : textWidth;
             const first = node.firstChild;

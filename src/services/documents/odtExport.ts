@@ -1,3 +1,9 @@
+import { SECTION_BREAK } from "../../editor/Sections";
+import { sanitizeHeaderFooter, type HeaderFooterSettings } from "../../pagination/headerFooter";
+import { sanitizePage } from "./sanitize";
+import type { PageSetup } from "../../state/types";
+import { cleanWatermark } from "../../editor/watermark";
+import { cleanLayout, type ParagraphLayout } from "../../editor/ParagraphFormat";
 import { cleanRowHeight } from "../../editor/TableRowResize";
 import { cleanPlace } from "../../editor/TableLook";
 import { cellLook, cleanLook, tint, type Line } from "../../editor/tableStyles";
@@ -33,6 +39,9 @@ class Ctx {
   warnings = new Set<string>();
   textStyles = new Map<string, string>();
   paraStyles = new Map<string, string>();
+  /** Master page the next top-level paragraph must start (a new section), consumed by `para`. */
+  pendingMaster: string | null = null;
+  takeMaster(): string | null { const m = this.pendingMaster; this.pendingMaster = null; return m; }
   pictures: Array<{ name: string; bytes: Uint8Array }> = [];
   colStyles: string[] = [];
   graphicStyles: string[] = [];
@@ -82,7 +91,7 @@ class Ctx {
     return this.cellStyles.get(key)!;
   }
 
-  paraStyle(parent: string, align?: string, lineHeight?: string, deco?: { shading?: unknown; borders?: Record<string, boolean> | null }): string {
+  paraStyle(parent: string, align?: string, lineHeight?: string, deco?: { shading?: unknown; borders?: Record<string, boolean> | null; layout?: ParagraphLayout }, master?: string | null): string {
     const sides = deco?.borders ? (["top", "right", "bottom", "left"] as const).filter((s) => deco.borders![s]).map((s) => `fo:border-${s}="0.75pt solid #6b7280"`) : [];
     const props = [
       align && align !== "left" ? `fo:text-align="${ALIGN[align] ?? "start"}"` : "",
@@ -90,11 +99,27 @@ class Ctx {
       deco?.shading ? `fo:background-color="${esc(String(deco.shading))}"` : "",
       ...sides,
       deco?.shading || sides.length ? 'fo:padding="0.08cm"' : "",
+      ...layoutProps(deco?.layout),
     ].filter(Boolean).join(" ");
-    const key = `${parent}|${props}`;
+    const key = `${parent}|${props}|${master ?? ""}`;
     if (!this.paraStyles.has(key)) this.paraStyles.set(key, `${this.prefix}P${this.paraStyles.size + 1}`);
     return this.paraStyles.get(key)!;
   }
+}
+
+/** `style:paragraph-properties` attributes of a paragraph's indents, spacing and page-flow options. */
+function layoutProps(l?: ParagraphLayout): string[] {
+  if (!l) return [];
+  return [
+    l.indentLeft ? `fo:margin-left="${+l.indentLeft.toFixed(3)}cm"` : "",
+    l.indentRight ? `fo:margin-right="${+l.indentRight.toFixed(3)}cm"` : "",
+    l.firstLine ? `fo:text-indent="${+l.firstLine.toFixed(3)}cm"` : "",
+    l.spaceBefore !== null ? `fo:margin-top="${l.spaceBefore}pt"` : "",
+    l.spaceAfter !== null ? `fo:margin-bottom="${l.spaceAfter}pt"` : "",
+    l.pageBreakBefore ? 'fo:break-before="page"' : "",
+    l.keepWithNext ? 'fo:keep-with-next="always"' : "",
+    l.keepLines ? 'fo:keep-together="always"' : "",
+  ];
 }
 
 function inline(ctx: Ctx, nodes: PM[] = []): string {
@@ -159,7 +184,7 @@ const lineHeightOf = (content: PM[] = []): string | undefined =>
 function para(ctx: Ctx, n: PM, parent = "Standard"): string {
   const lead = ctx.anchored.join("");
   ctx.anchored = [];
-  const style = ctx.paraStyle(n.type === "heading" ? `Heading_20_${n.attrs?.level ?? 1}` : parent, n.attrs?.textAlign as string | undefined, lineHeightOf(n.content), { shading: n.attrs?.shading, borders: n.attrs?.borders as Record<string, boolean> | null });
+  const style = ctx.paraStyle(n.type === "heading" ? `Heading_20_${n.attrs?.level ?? 1}` : parent, n.attrs?.textAlign as string | undefined, lineHeightOf(n.content), { shading: n.attrs?.shading, borders: n.attrs?.borders as Record<string, boolean> | null, layout: cleanLayout(n.attrs as never) }, ctx.takeMaster());
   const body = lead + inline(ctx, n.content);
   return n.type === "heading"
     ? `<text:h text:style-name="${style}" text:outline-level="${n.attrs?.level ?? 1}">${body}</text:h>`
@@ -272,6 +297,8 @@ function blocks(ctx: Ctx, nodes: PM[] = [], listStyle?: string): string {
   let out = "";
   const flush = () => { if (ctx.anchored.length) { out += `<text:p text:style-name="${ctx.paraStyle("Standard")}">${ctx.anchored.join("")}</text:p>`; ctx.anchored = []; } };
   for (const n of nodes) {
+    // A section starts with a paragraph carrying its master page; when it starts with something else, an empty one carries it.
+    if (ctx.pendingMaster && n.type !== "paragraph" && n.type !== "heading") out += `<text:p text:style-name="${ctx.paraStyle("Standard", undefined, undefined, undefined, ctx.takeMaster())}"/>`;
     if (n.type !== "paragraph" && n.type !== "heading" && n.type !== "shape" && n.type !== "shapeGroup") flush();
     switch (n.type) {
       case "paragraph": case "heading": out += para(ctx, n); break;
@@ -371,8 +398,8 @@ function automaticStyles(ctx: Ctx, model: DocumentModel): string {
   const textStyles = [...ctx.textStyles].map(([props, name]) => `<style:style style:name="${name}" style:family="text"><style:text-properties ${props}/></style:style>`).join("");
   const paraStyles = [...ctx.paraStyles]
     .map(([key, name]) => {
-      const [parent, props] = key.split("|");
-      return `<style:style style:name="${name}" style:family="paragraph" style:parent-style-name="${parent}">${props ? `<style:paragraph-properties ${props}/>` : ""}</style:style>`;
+      const [parent, props, master] = key.split("|");
+      return `<style:style style:name="${name}" style:family="paragraph" style:parent-style-name="${parent}"${master ? ` style:master-page-name="${master}"` : ""}>${props ? `<style:paragraph-properties ${props}/>` : ""}</style:style>`;
     })
     .join("");
   const cellStyles = [...ctx.cellStyles]
@@ -389,15 +416,29 @@ function automaticStyles(ctx: Ctx, model: DocumentModel): string {
 <style:style style:name="CellHead" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #000000" fo:background-color="#f3f4f6"/></style:style>`;
 }
 
-function namedStyles(model: DocumentModel, hfXml: string, hfStyles: string, gradients: string): string {
-  const hf = model.headerFooter;
+/** One section as ODF sees it: a page layout and a master page (with its headers and footers). */
+interface OdtSection {
+  page: PageSetup;
+  hf: HeaderFooterSettings | null;
+  hfXml: string;
+  nodes: PM[];
+}
+
+const masterName = (i: number) => (i === 0 ? "Standard" : `Section_${i + 1}`);
+
+/** `style:page-layout` of a section: exact centimetres (not rounded through pixels); ODF has no binding margin, it is added to its margin. */
+function pageLayout(sec: OdtSection, i: number): string {
+  const paper = paperCm(sec.page);
+  const [pw, ph] = sec.page.orientation === "landscape" ? [paper.height, paper.width] : [paper.width, paper.height];
+  const mg = effectiveMarginsCm(sec.page);
+  const usage = isMirrored(sec.page) ? ' style:page-usage="mirrored"' : "";
+  const hf = sec.hf;
+  return `<style:page-layout style:name="pm${i + 1}"${usage}><style:page-layout-properties fo:page-width="${+pw.toFixed(3)}cm" fo:page-height="${+ph.toFixed(3)}cm" style:print-orientation="${sec.page.orientation}" fo:margin-top="${+mg.top.toFixed(3)}cm" fo:margin-bottom="${+mg.bottom.toFixed(3)}cm" fo:margin-left="${+mg.left.toFixed(3)}cm" fo:margin-right="${+mg.right.toFixed(3)}cm"/>${hf && hasContent(hf.header) ? '<style:header-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-bottom="0.3cm"/></style:header-style>' : ""}${hf && hasContent(hf.footer) ? '<style:footer-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-top="0.3cm"/></style:footer-style>' : ""}</style:page-layout>`;
+}
+
+function namedStyles(model: DocumentModel, sections: OdtSection[], hfStyles: string, gradients: string): string {
   const font = esc(model.defaults?.fontFamily ?? "Liberation Serif");
   const size = model.defaults?.fontSizePt ?? 12;
-  // Exact centimetres (not rounded through pixels). ODF has no binding margin: it is added to the margin it belongs to.
-  const paper = paperCm(model.page);
-  const [pw, ph] = model.page.orientation === "landscape" ? [paper.height, paper.width] : [paper.width, paper.height];
-  const mg = effectiveMarginsCm(model.page);
-  const usage = isMirrored(model.page) ? ' style:page-usage="mirrored"' : "";
   // Paragraph styles in full (the built-in look plus the user's edits), so other editors show the same.
   const look = (id: StyleId) => {
     const r = resolveStyle(id, model.styles ?? {}, { fontFamily: model.defaults?.fontFamily ?? "Liberation Serif", sizePt: size });
@@ -426,20 +467,34 @@ ${gradients}
 </office:styles>
 <office:automatic-styles>
 ${hfStyles}
-<style:page-layout style:name="pm1"${usage}><style:page-layout-properties fo:page-width="${+pw.toFixed(3)}cm" fo:page-height="${+ph.toFixed(3)}cm" style:print-orientation="${model.page.orientation}" fo:margin-top="${+mg.top.toFixed(3)}cm" fo:margin-bottom="${+mg.bottom.toFixed(3)}cm" fo:margin-left="${+mg.left.toFixed(3)}cm" fo:margin-right="${+mg.right.toFixed(3)}cm"/>${hf && hasContent(hf.header) ? '<style:header-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-bottom="0.3cm"/></style:header-style>' : ""}${hf && hasContent(hf.footer) ? '<style:footer-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-top="0.3cm"/></style:footer-style>' : ""}</style:page-layout>
+${sections.map((sec, i) => pageLayout(sec, i)).join("\n")}
 </office:automatic-styles>
-<office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">${hfXml}</style:master-page></office:master-styles>
+<office:master-styles>${sections.map((sec, i) => `<style:master-page style:name="${masterName(i)}" style:page-layout-name="pm${i + 1}">${sec.hfXml}</style:master-page>`).join("")}</office:master-styles>
 </office:document-styles>`;
 }
 
 export async function exportOdt(model: DocumentModel): Promise<ExportResult> {
   const ctx = new Ctx();
-  const body = blocks(ctx, model.content.content) || `<text:p text:style-name="${ctx.paraStyle("Standard")}"/>`;
-
-  // Header and footer are written into styles.xml: they need their own style and picture namespace.
-  const hfCtx = new Ctx("H");
-  const hf = model.headerFooter;
-  const hfXml = hf ? hfElements(hfCtx, "header", hf.header, hf.titlePage, hf.evenOdd) + hfElements(hfCtx, "footer", hf.footer, hf.titlePage, hf.evenOdd) : "";
+  if (cleanWatermark(model.watermark)) ctx.warnings.add("Filigrane : non écrit dans les fichiers ODT (il est conservé en DOCX et dans les documents Loma).");
+  // Sections: the document's own setup, then one per section break (each with its master page; a section without headers of its own
+  // repeats the previous ones, which is what ODF needs).
+  const hfCtx = new Ctx("H"); // headers and footers live in styles.xml: they need their own style and picture namespace
+  const sections: OdtSection[] = [{ page: model.page, hf: model.headerFooter ?? null, hfXml: "", nodes: [] }];
+  for (const n of model.content.content ?? []) {
+    if (n.type === SECTION_BREAK) {
+      const prev = sections[sections.length - 1];
+      sections.push({ page: sanitizePage(n.attrs?.page as Partial<PageSetup>), hf: n.attrs?.hf ? sanitizeHeaderFooter(n.attrs.hf) : prev.hf, hfXml: "", nodes: [] });
+    } else sections[sections.length - 1].nodes.push(n);
+  }
+  let body = "";
+  sections.forEach((sec, i) => {
+    ctx.pendingMaster = i > 0 ? masterName(i) : null;
+    body += blocks(ctx, sec.nodes);
+    if (ctx.pendingMaster) body += `<text:p text:style-name="${ctx.paraStyle("Standard", undefined, undefined, undefined, ctx.takeMaster())}"/>`; // an empty section still starts its page
+    const hf = sec.hf;
+    sec.hfXml = hf ? hfElements(hfCtx, "header", hf.header, hf.titlePage, hf.evenOdd) + hfElements(hfCtx, "footer", hf.footer, hf.titlePage, hf.evenOdd) : "";
+  });
+  body = body || `<text:p text:style-name="${ctx.paraStyle("Standard")}"/>`;
 
   const content = `<?xml version="1.0" encoding="UTF-8"?>
 <office:document-content ${NS} office:version="1.3">
@@ -464,7 +519,7 @@ ${[...ctx.pictures, ...hfCtx.pictures].map((p) => `<manifest:file-entry manifest
   zip.file("mimetype", ODT_MIME, { compression: "STORE" }); // must be first and uncompressed
   zip.file("META-INF/manifest.xml", manifest);
   zip.file("content.xml", content);
-  zip.file("styles.xml", namedStyles(model, hfXml, automaticStyles(hfCtx, model), ctx.gradients.join("")));
+  zip.file("styles.xml", namedStyles(model, sections, automaticStyles(hfCtx, model), ctx.gradients.join("")));
   zip.file("meta.xml", meta);
   for (const p of [...ctx.pictures, ...hfCtx.pictures]) zip.file(p.name, p.bytes);
   for (const f of ctx.formulas) zip.file(`${f.dir}/content.xml`, `<?xml version="1.0" encoding="UTF-8"?>\n${f.mathml}`);

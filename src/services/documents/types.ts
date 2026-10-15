@@ -1,4 +1,5 @@
 import type { JSONContent } from "@tiptap/react";
+import type { Watermark } from "../../editor/watermark";
 import type { DocStyles } from "../../editor/docStyles";
 import type { HeaderFooterSettings } from "../../pagination/headerFooter";
 import type { PageSetup } from "../../state/types";
@@ -20,6 +21,8 @@ export interface DocumentModel {
   content: JSONContent;
   page: PageSetup;
   headerFooter?: HeaderFooterSettings;
+  /** Text watermark drawn on every page. */
+  watermark?: Watermark | null;
   /** Edited paragraph styles (Normal, headings, quote, code). */
   styles?: DocStyles;
   /** Default font of the document, written to the file so other editors show the same text style. */

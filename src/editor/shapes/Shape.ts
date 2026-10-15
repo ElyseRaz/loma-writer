@@ -1,3 +1,4 @@
+import { placeInSheets, sheetIndexAt, stackSheets } from "../../pagination/pageLayout";
 import { mergeAttributes, Node } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState } from "@tiptap/pm/state";
@@ -102,11 +103,18 @@ function attrSpec(base: Record<string, unknown>) {
 
 // ----------------------------------------------------------------------------------------------- layout
 
+/** Replaces the inline style of `el`, keeping the section margins the pagination put there as custom properties. */
+function setStyle(el: HTMLElement, css: string): void {
+  const keep = ["--sec-l", "--sec-r"].map((n) => [n, el.style.getPropertyValue(n)] as const);
+  el.style.cssText = css;
+  keep.forEach(([n, v]) => v && el.style.setProperty(n, v));
+}
+
 /** Position and size of the box, according to the wrap mode. Returns what the box needs to draw itself. */
 function layoutBox(anchor: HTMLElement, box: HTMLElement, a: Placement & { height: number }, textBox: boolean, inGroup: boolean): void {
   const mode: Wrap = inGroup ? "group" : a.wrap;
   box.style.cssText = "";
-  anchor.style.cssText = "";
+  setStyle(anchor, "");
   anchor.dataset.wrap = mode;
   box.style.width = `${a.width}px`;
   box.style[textBox ? "minHeight" : "height"] = `${a.height}px`;
@@ -134,7 +142,7 @@ function layoutBox(anchor: HTMLElement, box: HTMLElement, a: Placement & { heigh
     }
     case "front":
     case "behind":
-      anchor.style.cssText = "display:block;height:0;position:relative;";
+      setStyle(anchor, "display:block;height:0;position:relative;");
       box.style.position = "absolute";
       box.style.zIndex = mode === "front" ? String(10 + a.z) : String(-50 + a.z);
       break;
@@ -153,16 +161,16 @@ export function placeFloating(anchor: HTMLElement, box: HTMLElement, a: Placemen
   if (a.wrap !== "front" && a.wrap !== "behind") return;
   if (a.anchor === "paragraph") { box.style.left = `${a.x}px`; box.style.top = `${a.y}px`; return; }
   const stack = anchor.closest<HTMLElement>(".page-stack");
-  const pitch = Number(stack?.dataset.pitch) || 0;
-  if (!stack || !pitch) { box.style.left = `${a.x}px`; box.style.top = `${a.y}px`; return; }
+  if (!stack || !(Number(stack.dataset.pitch) > 0)) { box.style.left = `${a.x}px`; box.style.top = `${a.y}px`; return; }
+  const sheets = stackSheets(stack);
   const s = stack.getBoundingClientRect();
   const scale = s.width / stack.offsetWidth || 1;
   const r = anchor.getBoundingClientRect();
   const anchorY = (r.top - s.top) / scale;
   const anchorX = (r.left - s.left) / scale;
-  const page = Math.max(0, Math.floor((anchorY + 1) / pitch));
-  box.style.left = `${a.x - anchorX}px`;
-  box.style.top = `${page * pitch + a.y - anchorY}px`;
+  const sheet = sheets[sheetIndexAt(sheets, anchorY)];
+  box.style.left = `${sheet.left + a.x - anchorX}px`;
+  box.style.top = `${sheet.top + a.y - anchorY}px`;
 }
 
 /**
@@ -267,9 +275,8 @@ function makeView(kind: "shape" | "group") {
     const startMove = (e: MouseEvent, threshold: number) => {
       if (isGroupChild()) { drag(e, (dx, dy) => ({ x: Math.round(attrs().x + dx), y: Math.round(attrs().y + dy) })); return; }
       const stack = anchor.closest<HTMLElement>(".page-stack");
-      const pitch = Number(stack?.dataset.pitch) || 0;
       const pos0 = getPos();
-      if (!stack || !pitch || pos0 === undefined) { drag(e, (dx, dy) => ({ x: Math.round(attrs().x + dx), y: Math.round(attrs().y + dy) })); return; }
+      if (!stack || !(Number(stack.dataset.pitch) > 0) || pos0 === undefined) { drag(e, (dx, dy) => ({ x: Math.round(attrs().x + dx), y: Math.round(attrs().y + dy) })); return; }
       const a0 = attrs();
       const s = stack.getBoundingClientRect();
       const scale = s.width / stack.offsetWidth || 1;
@@ -277,22 +284,16 @@ function makeView(kind: "shape" | "group") {
       // Top-left of the unrotated box, in page-stack px (the bounding rect of a rotated box is larger).
       const absX0 = (r.left + r.width / 2 - s.left) / scale - a0.width / 2;
       const absY0 = (r.top + r.height / 2 - s.top) / scale - Math.max(a0.height, box.offsetHeight) / 2;
-      const pageW = stack.offsetWidth;
+      const sheets = stackSheets(stack);
       const anchorRect = anchor.getBoundingClientRect();
-      const anchorPage = Math.max(0, Math.floor(((anchorRect.top - s.top) / scale + 1) / pitch));
+      const anchorPage = sheetIndexAt(sheets, (anchorRect.top - s.top) / scale);
       const startX = e.clientX, startY = e.clientY;
       let started = false;
       let pos = { x: absX0, y: absY0 };
-      const place = () => {
-        // Anywhere on the sheet, margins included, never outside the paper.
-        const x = Math.round(Math.min(Math.max(pos.x, 0), Math.max(0, pageW - a0.width)));
-        const sheet = stack.querySelector<HTMLElement>(".page-sheet");
-        const pages = Number(stack.dataset.pages) || 1;
-        const maxY = sheet ? (pages - 1) * pitch + sheet.offsetHeight - Math.max(a0.height, box.offsetHeight) : Infinity;
-        const y = Math.round(Math.min(Math.max(pos.y, 0), Math.max(0, maxY)));
-        return { x, y };
-      };
-      const draftOf = () => { const p = place(); return { ...a0, wrap: a0.wrap === "behind" ? "behind" : "front", anchor: "page", x: p.x, y: p.y - anchorPage * pitch } as ShapeAttrs; };
+      // Anywhere on a sheet, margins included, never outside the paper (sheets may differ in size and position).
+      const place = () => placeInSheets(sheets, pos.x, pos.y, a0.width, Math.max(a0.height, box.offsetHeight));
+      // The live preview is drawn relative to the anchor's sheet; the stored position is relative to the sheet it lands on.
+      const draftOf = () => { const p = place(); return { ...a0, wrap: a0.wrap === "behind" ? "behind" : "front", anchor: "page", x: p.ax - sheets[anchorPage].left, y: p.ay - sheets[anchorPage].top } as ShapeAttrs; };
       const onMoveEv = (ev: MouseEvent) => {
         if (!started && Math.hypot(ev.clientX - startX, ev.clientY - startY) < threshold) return;
         started = true;
@@ -314,8 +315,8 @@ function makeView(kind: "shape" | "group") {
           return;
         }
         const p = place();
-        const targetPage = Math.max(0, Math.floor((p.y + 1) / pitch));
-        const attrsNext = (kind === "shape" ? cleanShapeAttrs : (x: Partial<ShapeAttrs>, b: ShapeAttrs) => ({ ...cleanPlacement(x, b), alt: b.alt }))({ ...a0, wrap: draftOf().wrap, anchor: "page", x: p.x, y: p.y - targetPage * pitch }, a0);
+        const targetPage = p.page;
+        const attrsNext = (kind === "shape" ? cleanShapeAttrs : (x: Partial<ShapeAttrs>, b: ShapeAttrs) => ({ ...cleanPlacement(x, b), alt: b.alt }))({ ...a0, wrap: draftOf().wrap, anchor: "page", x: p.x, y: p.y }, a0);
         const cur = getPos();
         if (cur === undefined) return;
         const tr = editor.state.tr;
@@ -328,7 +329,7 @@ function makeView(kind: "shape" | "group") {
             const dom = editor.view.nodeDOM(off);
             if (!(dom instanceof HTMLElement) || n.type.name === "shape" || n.type.name === "shapeGroup") return;
             const top = (dom.getBoundingClientRect().top - s.top) / scale;
-            if (top >= targetPage * pitch - 2) { at = off; found = true; }
+            if (top >= sheets[targetPage].top - 2) { at = off; found = true; }
           });
           const node = editor.state.doc.nodeAt(cur)!.type.create(attrsNext, editor.state.doc.nodeAt(cur)!.content);
           const size = editor.state.doc.nodeAt(cur)!.nodeSize;

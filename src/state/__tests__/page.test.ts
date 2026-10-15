@@ -122,3 +122,88 @@ describe("saving and reopening", () => {
     expect(cm(0)).toBe(0);
   });
 });
+
+describe("watermark", () => {
+  const wm = { text: "BROUILLON", color: "#dc2626", size: 90, layout: "diagonal" as const, opacity: 0.4 };
+  it("is written to DOCX as Word's own shape and read back", async () => {
+    const { bytes } = await exportDocx({ ...doc(DEFAULT_PAGE), watermark: wm });
+    const zip = await JSZip.loadAsync(bytes);
+    const header = await zip.file("word/header1.xml")!.async("string");
+    expect(header).toContain("PowerPlusWaterMarkObject");
+    expect(header).toContain('string="BROUILLON"');
+    const { model } = await importDocx(bytes);
+    expect(model.watermark).toEqual(wm);
+  });
+  it("is put in the existing header and not lost with the header content", async () => {
+    const { headerFooterSample } = await import("../../services/documents/__tests__/fixtures");
+    const { bytes } = await exportDocx({ ...doc(DEFAULT_PAGE), headerFooter: headerFooterSample(), watermark: { ...wm, layout: "horizontal" } });
+    const { model } = await importDocx(bytes);
+    expect(model.watermark?.layout).toBe("horizontal");
+    expect(model.headerFooter?.header.default).toBeTruthy();
+  });
+  it("is warned about in ODT, and invalid values are rejected", async () => {
+    expect((await exportOdt({ ...doc(DEFAULT_PAGE), watermark: wm })).warnings.join()).toMatch(/Filigrane/);
+    const { cleanWatermark } = await import("../../editor/watermark");
+    expect(cleanWatermark({ text: "   " })).toBeNull();
+    expect(cleanWatermark({ text: "x", size: 9999, opacity: 7, color: "red" })).toEqual({ text: "x", color: "#c0c0c0", size: 250, layout: "diagonal", opacity: 1 });
+  });
+  it("round-trips through the legacy .loma format", async () => {
+    const { lomaAdapter } = await import("../../services/documents/lomaAdapter");
+    const back = await lomaAdapter.import((await lomaAdapter.export({ ...doc(DEFAULT_PAGE), watermark: wm })).bytes);
+    expect(back.model.watermark).toEqual(wm);
+  });
+});
+
+describe("sections", () => {
+  const P = (text: string) => ({ type: "paragraph", content: [{ type: "text", text }] });
+  const land: PageSetup = { size: "A4", orientation: "landscape", margins: "narrow" };
+  const letter: PageSetup = { size: "Letter", orientation: "portrait", margins: "wide", gutterCm: 1 };
+  const hf = (t: string) => ({ header: { default: { blocks: [{ type: "paragraph", content: [{ type: "text", text: t }] }] } }, footer: {}, titlePage: false, evenOdd: false });
+  const model = (): DocumentModel => ({
+    content: { type: "doc", content: [P("Un"), P("Deux"), { type: "sectionBreak", attrs: { page: land, hf: null } }, P("Trois"), { type: "sectionBreak", attrs: { page: letter, hf: hf("Section 3") } }, P("Quatre")] },
+    page: DEFAULT_PAGE,
+    headerFooter: hf("Section 1"),
+  });
+  const kinds = (j: { content?: Array<{ type?: string }> }) => (j.content ?? []).map((n) => n.type);
+  const breaks = (j: { content?: Array<{ type?: string; attrs?: Record<string, unknown> }> }) => (j.content ?? []).filter((n) => n.type === "sectionBreak");
+
+  it("DOCX writes one section per break and reads them back", async () => {
+    const zip = await JSZip.loadAsync((await exportDocx(model())).bytes);
+    const xml = await zip.file("word/document.xml")!.async("string");
+    expect((xml.match(/<w:sectPr/g) ?? []).length).toBe(3);
+    const { model: back } = await importDocx(await zip.generateAsync({ type: "uint8array" }));
+    expect(kinds(back.content as never)).toEqual(["paragraph", "paragraph", "sectionBreak", "paragraph", "sectionBreak", "paragraph"]);
+    const b = breaks(back.content as never);
+    expect(b[0].attrs?.page).toMatchObject({ size: "A4", orientation: "landscape", margins: "narrow" });
+    expect(b[1].attrs?.page).toMatchObject({ size: "Letter", orientation: "portrait", margins: "wide", gutterCm: 1 });
+    expect(b[0].attrs?.hf).toBeNull(); // section 2 keeps section 1's header
+    expect(JSON.stringify(b[1].attrs?.hf)).toContain("Section 3");
+    expect(JSON.stringify(back.headerFooter)).toContain("Section 1");
+    expect(back.page.orientation).toBe("portrait");
+  });
+  it("ODT writes one master page per section and reads them back", async () => {
+    const zip = await JSZip.loadAsync((await exportOdt(model())).bytes);
+    const styles = await zip.file("styles.xml")!.async("string");
+    expect((styles.match(/<style:master-page /g) ?? []).length).toBe(3);
+    expect(styles).toMatch(/fo:page-width="29\.7cm" fo:page-height="21cm"/);
+    const { model: back } = await importOdt(await zip.generateAsync({ type: "uint8array" }));
+    expect(kinds(back.content as never)).toEqual(["paragraph", "paragraph", "sectionBreak", "paragraph", "sectionBreak", "paragraph"]);
+    const b = breaks(back.content as never);
+    expect(b[0].attrs?.page).toMatchObject({ size: "A4", orientation: "landscape", margins: "narrow" });
+    expect(b[1].attrs?.page).toMatchObject({ size: "Letter", orientation: "portrait" });
+    expect(b[0].attrs?.hf).toBeNull();
+    expect(JSON.stringify(b[1].attrs?.hf)).toContain("Section 3");
+    expect(JSON.stringify(back.headerFooter)).toContain("Section 1");
+  });
+  it("a section that starts with a table or an image still gets its page (an empty paragraph carries the master page)", async () => {
+    const m: DocumentModel = { content: { type: "doc", content: [P("a"), { type: "sectionBreak", attrs: { page: land, hf: null } }, { type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [P("c")] }] }] }, P("fin")] }, page: DEFAULT_PAGE };
+    const { model: back } = await importOdt((await exportOdt(m)).bytes);
+    expect(kinds(back.content as never)).toEqual(["paragraph", "sectionBreak", "table", "paragraph"]);
+  });
+  it("a document with a single section is unchanged", async () => {
+    const one: DocumentModel = { content: { type: "doc", content: [P("x")] }, page: land };
+    const { model: back } = await importDocx((await exportDocx(one)).bytes);
+    expect(back.page.orientation).toBe("landscape");
+    expect(kinds(back.content as never)).toEqual(["paragraph"]);
+  });
+});

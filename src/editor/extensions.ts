@@ -10,10 +10,12 @@ import { ObjectPlacement } from "./ObjectPlacement";
 import { InternalClipboard } from "./InternalClipboard";
 import { pictureAttributes, pictureView } from "./ImageView";
 import { TableRowResize } from "./TableRowResize";
+import { SectionBreak } from "./Sections";
 import { TableFit } from "./TableFit";
 import { ListTypes } from "./ListTypes";
 import { PageBreak } from "./PageBreak";
 import { Pagination } from "../pagination/extension";
+import { ParagraphFormat } from "./ParagraphFormat";
 import { BlockStyle } from "./BlockStyle";
 import { FindReplace } from "./FindReplace";
 import { Bookmark, Equation, InternalLinks } from "./InsertNodes";
@@ -52,7 +54,9 @@ export function createExtensions(options: { pagination?: boolean } = {}): Extens
     PageBreak,
     ...(options.pagination === false ? [] : [Pagination]),
     BlockStyle,
+    ParagraphFormat,
     TableFit,
+    SectionBreak,
     InternalClipboard,
     ObjectPlacement,
     TableRowResize,

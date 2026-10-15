@@ -1,3 +1,4 @@
+import type { ParagraphLayout } from "../../editor/ParagraphFormat";
 import { builtinStyle, cleanStyles, STYLE_IDS, type DocStyles, type StyleId } from "../../editor/docStyles";
 import { bulletFromChar, numberFromFormat } from "./listFormats";
 import JSZip from "jszip";
@@ -10,6 +11,7 @@ import { byLocalName } from "../math/mathml";
 import { DEFAULT_SHAPE_STYLE, isKnownShape, NONE, TEXT_BOX } from "../../editor/shapes/catalog";
 import type { Gradient, Shadow } from "../../editor/shapes/types";
 import { sanitizeHeaderFooter, type HeaderFooterSettings } from "../../pagination/headerFooter";
+import type { PageSetup } from "../../state/types";
 
 interface Style {
   name: string;
@@ -25,6 +27,10 @@ interface Style {
   borders?: Record<string, boolean>;
   cellShading?: string;
   cellBorderless?: boolean;
+  /** `style:master-page-name`: a paragraph with this style starts a new page with that master page (a new section). */
+  masterPage?: string;
+  /** Indents, spacing and page-flow options of the paragraph style. */
+  layout?: Partial<ParagraphLayout>;
   /** Minimum row height of a table-row style, in px. */
   rowHeightPx?: number;
   /** `style:graphic-properties` attributes (shapes, text frames). */
@@ -46,8 +52,15 @@ interface Ctx {
   fields?: boolean;
   /** `draw:gradient` definitions by name. */
   gradients?: Map<string, { style: string; start: string; end: string; angle: number }>;
+  /** Master pages by name (paper, margins, headers and footers) and the one in effect while reading the body. */
+  masters?: Map<string, { page: PageSetup; hf: HeaderFooterSettings | undefined }>;
+  currentMaster?: string;
+  /** Headers and footers in effect (to tell whether a section has its own). */
+  currentHf?: HeaderFooterSettings;
   /** Page width and margins (px), to turn ODF positions into ours. */
   page?: { w: number; margins: { top: number; left: number; right: number } };
+  /** The `office:text` element being read (sections only start at its top level). */
+  body?: Element;
   warnings: Set<string>;
 }
 
@@ -96,6 +109,34 @@ const merge = (base: RunProps, over: RunProps): RunProps => {
 const ALIGN: Record<string, string> = { start: "left", left: "left", center: "center", end: "right", right: "right", justify: "justify" };
 
 /** Background and borders written directly on a paragraph style. */
+const cmOfAttr = (pp: Element | null, name: string): number | null => {
+  const v = pp?.getAttribute(name);
+  const n = v ? px(v) : null;
+  return n === null ? null : +((n * 2.54) / 96).toFixed(3);
+};
+const ptOfAttr = (pp: Element | null, name: string): number | null => {
+  const v = pp?.getAttribute(name);
+  const n = v ? px(v) : null;
+  return n === null ? null : +(n * 0.75).toFixed(2);
+};
+
+/** Indents, spacing and page-flow options written on a paragraph style. */
+function readLayout(pp: Element | null): Partial<ParagraphLayout> | undefined {
+  if (!pp) return undefined;
+  const out: Partial<ParagraphLayout> = {};
+  const l = cmOfAttr(pp, "fo:margin-left") ?? cmOfAttr(pp, "fo:margin"), r = cmOfAttr(pp, "fo:margin-right"), f = cmOfAttr(pp, "fo:text-indent");
+  if (l) out.indentLeft = l;
+  if (r) out.indentRight = r;
+  if (f) out.firstLine = f;
+  const b = ptOfAttr(pp, "fo:margin-top"), a = ptOfAttr(pp, "fo:margin-bottom");
+  if (b !== null) out.spaceBefore = b;
+  if (a !== null) out.spaceAfter = a;
+  if (pp.getAttribute("fo:break-before") === "page") out.pageBreakBefore = true;
+  if (pp.getAttribute("fo:keep-with-next") === "always") out.keepWithNext = true;
+  if (pp.getAttribute("fo:keep-together") === "always") out.keepLines = true;
+  return Object.keys(out).length ? out : undefined;
+}
+
 function paragraphDeco(pp: Element | null): { shading?: string; borders?: Record<string, boolean> } {
   if (!pp) return {};
   const bg = pp.getAttribute("fo:background-color");
@@ -149,6 +190,8 @@ function collectStyles(docs: Document[], ctx: Ctx) {
         ...paragraphDeco(pp),
         ...cellDeco(first(s, "style:table-cell-properties")),
         gfx: graphicProps(first(s, "style:graphic-properties")),
+        layout: readLayout(pp),
+        masterPage: s.getAttribute("style:master-page-name") || undefined,
         rowHeightPx: rowProps ? px(rowProps.getAttribute("style:min-row-height") ?? rowProps.getAttribute("style:row-height")) ?? undefined : undefined,
         automatic: s.parentNode?.nodeName === "office:automatic-styles",
       });
@@ -482,11 +525,11 @@ function convertPara(ctx: Ctx, el: Element): { node: PM; kind: Kind; before: boo
   if (lineHeight) base.lineHeight = lineHeight;
   const own = ctx.styles.get(styleName ?? "");
   // Only an automatic (direct) style decorates a paragraph; named styles such as Quote keep their own look.
-  const deco = own?.automatic ? { shading: own.shading, borders: own.borders } : undefined;
+  const deco = own?.automatic ? { shading: own.shading, borders: own.borders, layout: own.layout } : undefined;
   const inline: PM[] = [];
   inlineOf(ctx, el, kind.kind === "heading" ? { ...base, bold: undefined, sizePt: undefined } : base, inline);
   const content = splitEquations(mergeText(inline));
-  return { node: kind.kind === "heading" ? heading(kind.level, content, align, deco) : paragraph(content, align, deco), kind, before: !!own?.breakBefore, after: !!own?.breakAfter };
+  return { node: kind.kind === "heading" ? heading(kind.level, content, align, deco) : paragraph(content, align, deco), kind, before: false, after: !!own?.breakAfter };
 }
 
 function convertTable(ctx: Ctx, tbl: Element): PM {
@@ -554,6 +597,20 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
   for (const el of kids(container)) {
     switch (el.nodeName) {
       case "text:h": case "text:p": {
+        // A paragraph whose style names another master page starts a new section (the empty ones only carry the mark).
+        if (container === ctx.body) {
+          const mp = ctx.styles.get(el.getAttribute("text:style-name") ?? "")?.masterPage;
+          const m = mp ? ctx.masters?.get(mp) : undefined;
+          if (mp && m && mp !== ctx.currentMaster) {
+            const hf = m.hf ?? ctx.currentHf ?? { header: {}, footer: {}, titlePage: false, evenOdd: false };
+            const linked = JSON.stringify(hf) === JSON.stringify(ctx.currentHf ?? { header: {}, footer: {}, titlePage: false, evenOdd: false });
+            quote = code = null;
+            out.push({ type: "sectionBreak", attrs: { page: m.page, hf: linked ? null : hf } });
+            ctx.currentMaster = mp;
+            ctx.currentHf = hf;
+            if (!el.textContent?.trim() && !el.children.length) break;
+          }
+        }
         const { node, kind, before, after } = convertPara(ctx, el);
         if (before) { quote = code = null; out.push({ type: "pageBreak" }); }
         if (after && !node.content?.length) { quote = code = null; out.push({ type: "pageBreak" }); break; }
@@ -648,27 +705,47 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
   const text = first(content, "office:text");
   if (!text) throw corrupt("corps du document absent");
 
-  // Page setup from the first master page (read first: positions of free shapes depend on it).
-  let page = pageFromDimensions(794, 1123, null, ctx.warnings);
-  const master = styles ? first(styles, "style:master-page") : null;
-  const layoutName = master?.getAttribute("style:page-layout-name");
-  const layout = styles ? Array.from(styles.getElementsByTagName("style:page-layout")).find((l) => l.getAttribute("style:name") === layoutName) ?? first(styles, "style:page-layout") : null;
-  const props = layout ? first(layout, "style:page-layout-properties") : null;
-  let pageW = 794;
-  let margins = { top: 96, left: 96, right: 96 };
-  if (props) {
-    const w = px(props.getAttribute("fo:page-width"));
-    const h = px(props.getAttribute("fo:page-height"));
-    const side = (name: string) => px(props.getAttribute(name)) ?? 96;
-    if (w && h) {
-      page = pageFromDimensions(w, h, { top: side("fo:margin-top"), right: side("fo:margin-right"), bottom: side("fo:margin-bottom"), left: side("fo:margin-left") }, ctx.warnings, { mirrored: layout?.getAttribute("style:page-usage") === "mirrored" });
-      pageW = w;
-      margins = { top: side("fo:margin-top"), left: side("fo:margin-left"), right: side("fo:margin-right") };
+  // Master pages: paper, margins and headers/footers of each. A paragraph naming one of them starts a section.
+  const readMaster = (m: Element) => {
+    const layoutName = m.getAttribute("style:page-layout-name");
+    const layout = styles ? Array.from(styles.getElementsByTagName("style:page-layout")).find((l) => l.getAttribute("style:name") === layoutName) ?? first(styles, "style:page-layout") : null;
+    const props = layout ? first(layout, "style:page-layout-properties") : null;
+    let page = pageFromDimensions(794, 1123, null, ctx.warnings);
+    let w = 794;
+    let margins = { top: 96, left: 96, right: 96 };
+    if (props) {
+      const pw = px(props.getAttribute("fo:page-width"));
+      const ph = px(props.getAttribute("fo:page-height"));
+      const side = (name: string) => px(props.getAttribute(name)) ?? 96;
+      if (pw && ph) {
+        page = pageFromDimensions(pw, ph, { top: side("fo:margin-top"), right: side("fo:margin-right"), bottom: side("fo:margin-bottom"), left: side("fo:margin-left") }, ctx.warnings, { mirrored: layout?.getAttribute("style:page-usage") === "mirrored" });
+        w = pw;
+        margins = { top: side("fo:margin-top"), left: side("fo:margin-left"), right: side("fo:margin-right") };
+      }
     }
+    return { page, w, margins };
+  };
+  const masterEls = styles ? Array.from(styles.getElementsByTagName("style:master-page")) : [];
+  ctx.masters = new Map();
+  ctx.body = text;
+  const infos = new Map<string, ReturnType<typeof readMaster>>();
+  for (const m of masterEls) {
+    const name = m.getAttribute("style:name") ?? "";
+    const info = readMaster(m);
+    infos.set(name, info);
+    ctx.masters.set(name, { page: info.page, hf: readHeadersFooters(ctx, m) });
   }
-  ctx.page = { w: pageW, margins };
+  // The section the document starts in: the master page of its first paragraph, else the first master page.
+  const firstPara = Array.from(text.children).find((c) => c.nodeName === "text:p" || c.nodeName === "text:h");
+  const firstMp = firstPara ? ctx.styles.get(firstPara.getAttribute("text:style-name") ?? "")?.masterPage : undefined;
+  const startName = firstMp && ctx.masters.has(firstMp) ? firstMp : masterEls[0]?.getAttribute("style:name") ?? "";
+  ctx.currentMaster = startName;
+  const startInfo = infos.get(startName) ?? { page: pageFromDimensions(794, 1123, null, ctx.warnings), w: 794, margins: { top: 96, left: 96, right: 96 } };
+  const page = startInfo.page;
+  ctx.page = { w: startInfo.w, margins: startInfo.margins };
+  const headerFooter = ctx.masters.get(startName)?.hf;
+  ctx.currentHf = headerFooter;
   const blocks = convertBlocks(ctx, text, null, 0);
-  const headerFooter = master ? readHeadersFooters(ctx, master) : undefined;
 
   if (!hasVisibleContent(blocks)) {
     const hasSource = !!text.textContent?.trim() || text.getElementsByTagName("draw:image").length > 0 || text.getElementsByTagName("table:table").length > 0;

@@ -194,7 +194,7 @@ const placed = await run(() => window.__lomaEditor.getJSON().content.find((n) =>
 const t1 = await page.locator(".ProseMirror table").boundingBox();
 const pm = await page.locator(".ProseMirror").boundingBox();
 ok(placed && placed.x < 0, `the table can be dragged into the left margin (x=${placed?.x})`);
-ok(t1.x < pm.x - 20, `and is drawn there (${Math.round(t1.x - pm.x)}px from the text column)`);
+ok(t1.x < pm.x + 96 - 20, `and is drawn there (${Math.round(t1.x - pm.x - 96)}px from the text column)`);
 await page.mouse.move(t1.x + 20, t1.y + 10);
 await page.locator("button[data-table-move]").dblclick();
 await settle(300);
