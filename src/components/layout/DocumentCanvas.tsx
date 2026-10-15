@@ -1,0 +1,156 @@
+import { EditorContent } from "@tiptap/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { applyFormat } from "../../editor/formatPainter";
+import { useCommandMap } from "../../editor/commands";
+import { useLomaEditor } from "../../editor/EditorProvider";
+import { useEditorSnapshot } from "../../editor/useEditorSnapshot";
+import { hasContent, reserveFor, sectionFor } from "../../pagination/headerFooter";
+import { pageGeometry } from "../../pagination/model";
+import { requestPagination, setPaginationInputs } from "../../pagination/extension";
+import { usePageInfo } from "../../pagination/usePagination";
+import { stylesCss } from "../../editor/docStyles";
+import { useApp } from "../../state/store";
+import { ContextMenu, type MenuEntry } from "../ui/Menu";
+import type { Anchor } from "../ui/Popover";
+import { PageSheets, type HeaderFooterHeights } from "./PageSheets";
+import { Ruler } from "./Ruler";
+import { ShapeToolbar } from "./ShapeToolbar";
+import { TableToolbar } from "./TableToolbar";
+
+/** Draws the user's style overrides, and re-paginates since they change line and paragraph heights. */
+function DocStylesCss() {
+  const { state } = useApp();
+  const editor = useLomaEditor();
+  const css = useMemo(() => stylesCss(state.docStyles), [state.docStyles]);
+  useEffect(() => { if (editor) requestPagination(editor); }, [css, editor, state.prefs.fontFamily, state.prefs.fontSizePt]);
+  return <style data-loma-styles>{css}</style>;
+}
+
+export function DocumentCanvas() {
+  const editor = useLomaEditor();
+  const snap = useEditorSnapshot(editor);
+  const cmds = useCommandMap();
+  const { state, set } = useApp();
+  const [menu, setMenu] = useState<Anchor | null>(null);
+
+  // Pagination works on logical page geometry; zoom only scales the rendering.
+  const section = useMemo(() => sectionFor(state.page, state.headerFooter), [state.page, state.headerFooter]);
+  // The room reserved for a header/footer follows its measured height (one line until measured).
+  const [hf, setHf] = useState<HeaderFooterHeights>({ header: 20, footer: 20 });
+  const geometry = useMemo(
+    () => pageGeometry(state.page, hasContent(state.headerFooter.header) ? reserveFor(hf.header) : 0, hasContent(state.headerFooter.footer) ? reserveFor(hf.footer) : 0),
+    [state.page, state.headerFooter, hf.header, hf.footer],
+  );
+  const scale = state.zoom / 100;
+  const { total } = usePageInfo(editor, geometry.pitch);
+
+  useEffect(() => {
+    if (editor) setPaginationInputs(editor, geometry, scale);
+  }, [editor, geometry, scale]);
+
+  // The editor is hidden behind the backstage: measure again as soon as it is visible.
+  useEffect(() => {
+    if (editor && state.view === "editor") requestAnimationFrame(() => requestPagination(editor));
+  }, [editor, state.view, state.docRevision]);
+
+  // Print uses the same page size as the document.
+  useEffect(() => {
+    let style = document.getElementById("loma-print-page") as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "loma-print-page";
+      document.head.appendChild(style);
+    }
+    style.textContent = `@page { size: ${geometry.width}px ${geometry.height}px; margin: 0; }`;
+  }, [geometry.width, geometry.height]);
+
+  // Double-click on an equation edits it.
+  useEffect(() => {
+    const edit = (e: Event) => set({ equationPos: (e as CustomEvent<{ pos: number }>).detail.pos, dialog: "equation" });
+    window.addEventListener("loma:edit-equation", edit);
+    return () => window.removeEventListener("loma:edit-equation", edit);
+  }, [set]);
+
+  // Format painter: the next selection made with the mouse receives the captured formatting.
+  const painter = state.painter;
+  useEffect(() => {
+    if (!painter) return;
+    const cancel = (e: KeyboardEvent) => e.key === "Escape" && set({ painter: null });
+    window.addEventListener("keydown", cancel);
+    return () => window.removeEventListener("keydown", cancel);
+  }, [painter, set]);
+  const onMouseUp = () => {
+    if (!painter || !editor) return;
+    // Let ProseMirror update the selection from the mouse first.
+    setTimeout(() => {
+      if (applyFormat(editor, painter)) set({ painter: null });
+    }, 0);
+  };
+
+  const item = (id: string, extra?: Partial<MenuEntry>): MenuEntry => {
+    const c = cmds[id];
+    return { label: c?.label ?? id, icon: c?.icon, shortcut: c?.shortcut, disabled: c?.disabled, checked: undefined, onSelect: c?.run, ...extra } as MenuEntry;
+  };
+  const menuItems: MenuEntry[] = [
+    item("edit.cut"), item("edit.copy"), item("edit.paste"),
+    { separator: true },
+    item("format.bold"), item("format.italic"), item("format.underline"),
+    item("insert.link"),
+    { separator: true },
+    item("style.h1"), item("style.h2"), item("style.normal"),
+    { separator: true },
+    item("insert.pageBreak"),
+    item("edit.selectAll"),
+  ];
+
+  const stackHeight = total * geometry.pitch - geometry.gap;
+
+  // Zoom is a paint-only transform: the layout (and so the pagination) stays at 100 %, whatever the zoom.
+  // The wrapper reserves the scaled size so scrolling and centering work.
+  const stackRef = useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = useState(stackHeight);
+  useEffect(() => {
+    const el = stackRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setContentHeight(el.offsetHeight));
+    ro.observe(el);
+    setContentHeight(el.offsetHeight);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div className="relative min-w-0 flex-1 overflow-auto bg-canvas [scrollbar-gutter:stable]" data-canvas>
+      {state.ruler && <Ruler pageWidth={geometry.width} marginLeft={geometry.insetLeft} marginRight={geometry.insetRight} zoom={state.zoom} />}
+      {editor && snap.inTable && <TableToolbar editor={editor} />}
+      <DocStylesCss />
+      {editor && <ShapeToolbar editor={editor} />}
+      <div className="flex w-max min-w-full justify-center px-8 py-6">
+        <div className="page-wrap relative shrink-0" style={{ width: geometry.width * scale, height: Math.max(stackHeight, contentHeight) * scale }}>
+        <div ref={stackRef} className="page-stack absolute left-0 top-0 origin-top-left" style={{ width: geometry.width, minHeight: stackHeight, transform: `scale(${scale})`, ["--doc-font" as string]: state.prefs.fontFamily, ["--doc-size" as string]: `${state.prefs.fontSizePt}pt` }} data-pages={total} data-pitch={geometry.pitch} data-inset-left={geometry.insetLeft} data-inset-top={geometry.insetTop}>
+          <PageSheets pages={total} geometry={geometry} section={section} onHeights={(h) => setHf((cur) => (cur.header === h.header && cur.footer === h.footer ? cur : h))} />
+          <div
+            className={`paper relative${state.marks ? " show-marks" : ""}${state.bookmarks ? "" : " hide-bookmarks"}${painter ? " painter-armed" : ""}`}
+            onMouseUp={onMouseUp}
+            style={
+              {
+                width: geometry.width,
+                minHeight: stackHeight,
+                padding: `${geometry.insetTop}px ${geometry.insetRight}px ${geometry.insetBottom}px ${geometry.insetLeft}px`,
+                "--doc-font": state.prefs.fontFamily,
+                "--doc-size": `${state.prefs.fontSizePt}pt`,
+              } as React.CSSProperties
+            }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu({ x: e.clientX, y: e.clientY });
+            }}
+          >
+            <EditorContent editor={editor} />
+          </div>
+        </div>
+        </div>
+      </div>
+      {menu && <ContextMenu at={menu} items={menuItems} onClose={() => setMenu(null)} />}
+    </div>
+  );
+}
