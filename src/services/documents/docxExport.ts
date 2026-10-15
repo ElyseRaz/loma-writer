@@ -1,3 +1,5 @@
+import { cleanPlace } from "../../editor/TableLook";
+import { cellLook, cleanLook, tint, type Line } from "../../editor/tableStyles";
 import { resolveStyle, type StyleId } from "../../editor/docStyles";
 import { ALL_BULLET_IDS, ALL_NUMBER_IDS, BULLET_CHARS, levelType } from "./listFormats";
 import { cleanListType } from "../../editor/ListTypes";
@@ -182,30 +184,40 @@ function blocks(ctx: Ctx, nodes: PM[] = [], list: ListCtx = null): Block[] {
 }
 
 function table(ctx: Ctx, n: PM): Table {
+  const look = cleanLook(n.attrs?.look);
   const cols = Math.max(1, ...((n.content ?? []).map((r) => (r.content ?? []).reduce((s, c) => s + +(c.attrs?.colspan ?? 1), 0))));
   const first = n.content?.[0]?.content ?? [];
   const known = first.length === cols && first.every((c) => Array.isArray(c.attrs?.colwidth));
-  const widths = known ? first.map((c) => (c.attrs!.colwidth as number[]).reduce((a, b) => a + b, 0) * TWIPS_PER_PX) : Array(cols).fill(Math.floor((9000) / cols));
+  const place = cleanPlace(n.attrs?.place);
+  const widths = known ? first.map((c) => (c.attrs!.colwidth as number[]).reduce((a, b) => a + b, 0) * TWIPS_PER_PX) : Array(cols).fill(Math.floor((place ? place.w * TWIPS_PER_PX : 9000) / cols));
   return new Table({
     width: { size: widths.reduce((a, b) => a + b, 0), type: WidthType.DXA },
     columnWidths: widths,
+    // A table moved freely keeps its offset from the text column (negative: into the margin).
+    ...(place ? { indent: { size: Math.round(place.x * TWIPS_PER_PX), type: WidthType.DXA } } : {}),
     rows: (n.content ?? []).map(
-      (row) =>
-        new TableRow({
+      (row, r) => {
+        let col = 0;
+        return new TableRow({
           tableHeader: row.content?.every((c) => c.type === "tableHeader") || undefined,
           children: (row.content ?? []).map((cell) => {
             const span = +(cell.attrs?.colspan ?? 1);
-            const body = blocks(ctx, cell.content);
+            const c0 = col;
+            col += span;
+            const cl = cellLook(look, { row: r, col: c0, rows: (n.content ?? []).length, cols, header: cell.type === "tableHeader", explicitFill: cell.attrs?.shading as string | undefined });
+            const body = blocks(ctx, tint(cell.content, cl.textColor, cl.bold));
+            const side = (l: Line | null) => (l ? { style: BorderStyle.SINGLE, size: Math.max(2, Math.round(l.width * 6)), color: hex(l.color) } : { style: BorderStyle.NONE, size: 0, color: "auto" });
             return new TableCell({
               columnSpan: span > 1 ? span : undefined,
               rowSpan: +(cell.attrs?.rowspan ?? 1) > 1 ? +(cell.attrs!.rowspan as number) : undefined,
               children: (body.length ? body : [new Paragraph("")]) as Paragraph[],
-              // Header cells carry a default grey; an explicit shading replaces it.
-              ...(cell.attrs?.shading || cell.type === "tableHeader" ? { shading: { type: ShadingType.CLEAR, fill: cell.attrs?.shading ? hex(String(cell.attrs.shading)) : "F3F4F6", color: "auto" } } : {}),
-              borders: Object.fromEntries(["top", "bottom", "left", "right"].map((s) => [s, cell.attrs?.borderless ? { style: BorderStyle.NONE, size: 0, color: "auto" } : { style: BorderStyle.SINGLE, size: 4, color: "D1D5DB" }])),
+              // The table style's fill (header, banded rows); a shading chosen by the user replaces it.
+              ...(cl.fill ? { shading: { type: ShadingType.CLEAR, fill: hex(cl.fill), color: "auto" } } : {}),
+              borders: cell.attrs?.borderless ? { top: side(null), bottom: side(null), left: side(null), right: side(null) } : { top: side(cl.top), bottom: side(cl.bottom), left: side(cl.left), right: side(cl.right) },
             });
           }),
-        }),
+        });
+      },
     ),
   });
 }

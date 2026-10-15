@@ -88,6 +88,118 @@ ok(h1[0] === "53.3333px" && /Georgia/.test(h1[1]), `Titre 1 follows the edited s
 await page.locator('button[title*="Titre 2"]').dblclick();
 ok(await page.getByRole("tab", { name: "Titre 2", selected: true }).count() === 1, "double-click on a style opens it for editing");
 
+await page.getByRole("button", { name: "Annuler", exact: true }).click();
+
+// --- Tables stay inside the page ---
+await run(() => window.__lomaEditor.chain().focus().setContent("<p>x</p>").insertTable({ rows: 2, cols: 12 }).run());
+await settle();
+const width = () => run(() => { const t = document.querySelector(".ProseMirror table").getBoundingClientRect().width, p = document.querySelector(".ProseMirror").getBoundingClientRect().width; return [Math.round(t), Math.round(p)]; });
+let [tw, pw] = await width();
+ok(tw <= pw + 1, `a 12-column table fits the page (${tw}/${pw})`);
+await run(() => { const e = window.__lomaEditor; let pos; e.state.doc.descendants((n, ps) => { if (n.type.name === "tableHeader" || n.type.name === "tableCell") { if (pos === undefined) pos = ps; } }); e.view.dispatch(e.state.tr.setNodeMarkup(pos, undefined, { ...e.state.doc.nodeAt(pos).attrs, colwidth: [1500] })); });
+await settle();
+[tw, pw] = await width();
+ok(tw <= pw + 1, `a column dragged wider than the page is clamped (${tw}/${pw})`);
+
+// --- Table: "+" handles, black borders, visible resize border ---
+await run(() => window.__lomaEditor.chain().focus().setContent("<p>x</p>").insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run());
+await settle(500);
+ok((await page.locator(".ProseMirror td").first().evaluate((el) => getComputedStyle(el).borderTopColor)) === "rgb(0, 0, 0)", "table borders are black by default");
+const cellsIn = () => run(() => document.querySelector(".ProseMirror table").rows[0].cells.length);
+const rowsIn = () => run(() => [...document.querySelector(".ProseMirror table").rows].filter((r) => !r.classList.contains("pg-spacer")).length);
+const tb = await page.locator(".ProseMirror table").boundingBox();
+const c0 = await page.locator(".ProseMirror th").nth(0).boundingBox();
+await page.mouse.move(tb.x + 100, tb.y + 100);
+await page.mouse.move(c0.x + c0.width, tb.y - 6);
+await page.locator("button[data-table-insert]").waitFor();
+ok(await page.locator("button[title='Insérer une colonne ici']").isVisible(), "a blue + appears above a column border");
+await page.locator("button[title='Insérer une colonne ici']").click();
+await settle(300);
+ok((await cellsIn()) === 4, `clicking it inserts a column (${await cellsIn()})`);
+const tb2 = await page.locator(".ProseMirror table").boundingBox();
+const r1 = await page.locator(".ProseMirror tr").nth(1).boundingBox();
+await page.mouse.move(tb2.x + 100, tb2.y + 100);
+await page.mouse.move(tb2.x - 6, r1.y);
+await page.locator("button[title='Insérer une ligne ici']").waitFor();
+await page.locator("button[title='Insérer une ligne ici']").click();
+await settle(300);
+ok((await rowsIn()) === 4, `a + left of a row border inserts a row (${await rowsIn()})`);
+const tb3 = await page.locator(".ProseMirror table").boundingBox();
+const hd = await page.locator(".ProseMirror th").nth(1).boundingBox();
+await page.mouse.move(hd.x + hd.width - 1, hd.y + hd.height / 2);
+await settle(200);
+ok((await page.locator(".column-resize-handle").count()) >= 1, "the border that will be moved is highlighted when hovered");
+await page.mouse.down();
+await page.mouse.move(hd.x + hd.width + 30, hd.y + hd.height / 2, { steps: 4 });
+ok((await page.locator(".column-resize-handle").count()) >= 1, "and stays highlighted while dragging");
+await page.mouse.up();
+void tb3;
+
+// --- Table styles and customisation ---
+await page.getByRole("button", { name: "Styles de tableau" }).click();
+await page.getByRole("button", { name: "Bleu", exact: true }).click();
+await settle(300);
+const th = await page.locator(".ProseMirror th").first().evaluate((el) => { const c = getComputedStyle(el); return [c.backgroundColor, c.color, c.borderTopColor]; });
+ok(th[0] === "rgb(37, 99, 235)" && th[1] === "rgb(255, 255, 255)" && th[2] === "rgb(37, 99, 235)", `the "Bleu" style colours header, text and borders (${th})`);
+await page.getByRole("button", { name: "Bordures du tableau" }).click();
+await page.getByRole("menuitem", { name: "Aucune bordure" }).click();
+await settle(200);
+ok((await page.locator(".ProseMirror td").first().evaluate((el) => getComputedStyle(el).borderTopWidth)) === "0px", "borders can be removed");
+await page.getByRole("button", { name: "Bordures du tableau" }).click();
+await page.getByRole("menuitem", { name: "Toutes les bordures" }).click();
+await page.getByRole("button", { name: "Épaisseur des bordures" }).click();
+await page.getByRole("menuitem", { name: "3 px" }).click();
+await page.getByRole("button", { name: "Alterner la couleur des lignes" }).click();
+await settle(200);
+ok((await page.locator(".ProseMirror td").first().evaluate((el) => getComputedStyle(el).borderTopWidth)) === "3px", "border width is customisable");
+ok(await run(() => !window.__lomaEditor.getAttributes("table").look.band), "banded rows can be switched off (the Bleu style has them)");
+await page.getByRole("button", { name: "Alterner la couleur des lignes" }).click();
+await settle(200);
+ok(await run(() => !!window.__lomaEditor.getAttributes("table").look.band), "and back on");
+const bandBg = await page.locator(".ProseMirror tr").nth(1).locator("td").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+ok(bandBg !== "rgba(0, 0, 0, 0)", `the banded row is drawn (${bandBg})`);
+const kept = await run(async () => JSON.stringify(window.__lomaEditor.getJSON()).includes('"look"'));
+ok(kept, "the table look is stored in the document");
+
+// --- Moving a table ---
+await run(() => window.__lomaEditor.commands.setContent("<p>Avant</p><table><tr><th><p>A</p></th><th><p>B</p></th></tr><tr><td><p>1</p></td><td><p>2</p></td></tr></table><p>Après</p><p>Fin</p>"));
+await settle(400);
+const tbm = await page.locator(".ProseMirror table").boundingBox();
+await page.mouse.move(tbm.x + 20, tbm.y + 10);
+await page.locator("button[data-table-move]").waitFor();
+const mv = await page.locator("button[data-table-move]").boundingBox();
+await page.mouse.move(mv.x + 9, mv.y + 9);
+await page.mouse.down();
+const last = await page.locator(".ProseMirror p").last().boundingBox();
+await page.mouse.move(last.x + 20, last.y + last.height + 5, { steps: 6 });
+ok(await page.locator("[data-table-drop]").count() === 1, "a line shows where the table will land");
+await page.mouse.up();
+await settle(300);
+const order = await run(() => window.__lomaEditor.getJSON().content.map((n) => n.type).join());
+ok(order === "paragraph,paragraph,paragraph,table,paragraph", `the table was moved to the end (${order})`);
+
+// --- Free horizontal placement, margins included ---
+await run(() => window.__lomaEditor.commands.setContent("<p>Texte</p><table><tr><th><p>A</p></th><th><p>B</p></th></tr><tr><td><p>1</p></td><td><p>2</p></td></tr></table><p>Fin</p>"));
+await settle(400);
+const t0 = await page.locator(".ProseMirror table").boundingBox();
+await page.mouse.move(t0.x + 20, t0.y + 10);
+await page.locator("button[data-table-move]").waitFor();
+const hb = await page.locator("button[data-table-move]").boundingBox();
+await page.mouse.move(hb.x + 9, hb.y + 9);
+await page.mouse.down();
+await page.mouse.move(hb.x + 9 - 60, hb.y + 9, { steps: 6 });
+await page.mouse.up();
+await settle(400);
+const placed = await run(() => window.__lomaEditor.getJSON().content.find((n) => n.type === "table").attrs.place);
+const t1 = await page.locator(".ProseMirror table").boundingBox();
+const pm = await page.locator(".ProseMirror").boundingBox();
+ok(placed && placed.x < 0, `the table can be dragged into the left margin (x=${placed?.x})`);
+ok(t1.x < pm.x - 20, `and is drawn there (${Math.round(t1.x - pm.x)}px from the text column)`);
+await page.mouse.move(t1.x + 20, t1.y + 10);
+await page.locator("button[data-table-move]").dblclick();
+await settle(300);
+ok(await run(() => window.__lomaEditor.getJSON().content.find((n) => n.type === "table").attrs.place === null), "double-clicking the handle puts it back in the text column");
+
 ok(errors.length === 0, "no page errors", errors.join(" | "));
 await browser.close();
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nAll typography checks passed");

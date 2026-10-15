@@ -132,7 +132,10 @@ export function FontSizePicker({ editor, snap }: { editor: Editor | null; snap: 
   );
 }
 
-function Swatches({ colors, onPick, onLive, onReset, resetLabel, current }: { colors: string[]; onPick: (c: string) => void; onLive: (c: string) => void; onReset: () => void; resetLabel: string; current?: string | null }) {
+/** Border colours offered for tables. */
+export const TEXT_COLORS_TABLE = ["#000000", "#6b7280", "#d1d5db", "#2563eb", "#16a34a", "#ea580c", "#dc2626", "#7c3aed"];
+
+export function Swatches({ colors, onPick, onLive, onReset, resetLabel, current }: { colors: string[]; onPick: (c: string) => void; onLive: (c: string) => void; onReset: () => void; resetLabel: string; current?: string | null }) {
   const [more, setMore] = useState(false);
   return (
     <div className="p-1.5">

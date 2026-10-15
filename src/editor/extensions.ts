@@ -5,6 +5,8 @@ import Highlight from "@tiptap/extension-highlight";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
 import CharacterCount from "@tiptap/extension-character-count";
+import { TableLookExtension } from "./TableLook";
+import { TableFit } from "./TableFit";
 import { ListTypes } from "./ListTypes";
 import { PageBreak } from "./PageBreak";
 import { Pagination } from "../pagination/extension";
@@ -45,6 +47,8 @@ export function createExtensions(options: { pagination?: boolean } = {}): Extens
     PageBreak,
     ...(options.pagination === false ? [] : [Pagination]),
     BlockStyle,
+    TableFit,
+    TableLookExtension,
     ListTypes,
     Bookmark,
     InternalLinks,

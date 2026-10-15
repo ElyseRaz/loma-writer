@@ -103,3 +103,28 @@ describe("edited paragraph styles", () => {
     expect(stylesCss({ h1: { fontFamily: "Georgia", sizePt: 20 } })).toBe('.paper .ProseMirror h1{font-family:"Georgia", sans-serif;font-size:20pt}');
   });
 });
+
+describe("table position and style", () => {
+  const model = (): DocumentModel => ({
+    content: { type: "doc", content: [{ type: "table", attrs: { place: { x: -40, w: 500 }, look: { borders: "all", color: "#2563eb", width: 2, headFill: "#2563eb", headText: "#ffffff", band: "#eff6ff", firstCol: false } }, content: [
+      { type: "tableRow", content: [{ type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }] }] },
+      { type: "tableRow", content: [{ type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "1" }] }] }] },
+    ] }] },
+    page: DEFAULT_PAGE,
+  });
+  it("a table moved into the margin keeps its offset in DOCX and ODT", async () => {
+    const docx = await (await import("jszip")).default.loadAsync((await exportDocx(model())).bytes);
+    const xml = await docx.file("word/document.xml")!.async("string");
+    expect(xml).toMatch(/<w:tblInd[^>]*w:w="-600"/);
+    expect(xml).toContain('w:fill="2563EB"'); // header fill of the style
+    expect(xml).toMatch(/w:color="2563EB"/); // border colour
+    const odt = await (await import("jszip")).default.loadAsync((await exportOdt(model())).bytes);
+    expect(await odt.file("content.xml")!.async("string")).toMatch(/fo:margin-left="-1\.05\dcm"/);
+  });
+  it("rejects invalid positions", async () => {
+    const { cleanPlace } = await import("../TableLook");
+    expect(cleanPlace({ x: 5, w: 10 })).toBeNull();
+    expect(cleanPlace({ x: "a", w: 300 })).toBeNull();
+    expect(cleanPlace({ x: -30.4, w: 400.2 })).toEqual({ x: -30, w: 400 });
+  });
+});

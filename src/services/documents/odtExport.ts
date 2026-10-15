@@ -1,3 +1,5 @@
+import { cleanPlace } from "../../editor/TableLook";
+import { cellLook, cleanLook, tint, type Line } from "../../editor/tableStyles";
 import { resolveStyle, type StyleId } from "../../editor/docStyles";
 import { ALL_BULLET_IDS, ALL_NUMBER_IDS, BULLET_CHARS, levelType, NUMBER_FORMATS } from "./listFormats";
 import { cleanListType } from "../../editor/ListTypes";
@@ -70,10 +72,9 @@ class Ctx {
 
   cellStyles = new Map<string, string>();
 
-  /** Automatic table-cell style for a shaded and/or borderless cell. */
-  cellStyle(head: boolean, shading?: string, borderless?: boolean): string {
-    if (!shading && !borderless) return head ? "CellHead" : "Cell";
-    const key = `${head}|${shading ?? ""}|${borderless ? 1 : 0}`;
+  /** Automatic table-cell style: fill and the four borders (`none` or `0.5pt solid #rrggbb`). */
+  cellStyle(spec: { fill: string | null; top: string; bottom: string; left: string; right: string }): string {
+    const key = JSON.stringify(spec);
     if (!this.cellStyles.has(key)) this.cellStyles.set(key, `${this.prefix}Cx${this.cellStyles.size + 1}`);
     return this.cellStyles.get(key)!;
   }
@@ -284,7 +285,10 @@ function table(ctx: Ctx, n: PM): string {
   const rows = n.content ?? [];
   const cols = Math.max(1, ...rows.map((r) => (r.content ?? []).reduce((s, c) => s + +(c.attrs?.colspan ?? 1), 0)));
   const pending: number[] = Array(cols).fill(0); // remaining rows covered by a row-span, per column
-  const renderRow = (row: PM): string => {
+  const look = cleanLook(n.attrs?.look);
+  const place = cleanPlace(n.attrs?.place);
+  if (place) ctx.colStyles.push(`<style:style style:name="${ctx.prefix}TblP${id}" style:family="table"><style:table-properties style:width="${pxToCm(place.w)}cm" table:align="left" fo:margin-left="${pxToCm(place.x)}cm"/></style:style>`);
+  const renderRow = (row: PM, r: number): string => {
     let col = 0;
     let out = "<table:table-row>";
     const cover = () => { while (col < cols && pending[col] > 0) { out += "<table:covered-table-cell/>"; pending[col]--; col++; } };
@@ -293,8 +297,10 @@ function table(ctx: Ctx, n: PM): string {
       const cs = +(cell.attrs?.colspan ?? 1);
       const rs = +(cell.attrs?.rowspan ?? 1);
       const head = cell.type === "tableHeader";
-      const body = blocks(ctx, cell.content) || `<text:p text:style-name="${ctx.paraStyle("Standard")}"/>`;
-      out += `<table:table-cell table:style-name="${ctx.cellStyle(head, cell.attrs?.shading as string | undefined, !!cell.attrs?.borderless)}" office:value-type="string"${cs > 1 ? ` table:number-columns-spanned="${cs}"` : ""}${rs > 1 ? ` table:number-rows-spanned="${rs}"` : ""}>${body}</table:table-cell>`;
+      const cl = cellLook(look, { row: r, col, rows: rows.length, cols, header: head, explicitFill: cell.attrs?.shading as string | undefined });
+      const line = (l: Line | null) => (l && !cell.attrs?.borderless ? `${+(l.width * 0.75).toFixed(2)}pt solid ${l.color}` : "none");
+      const body = blocks(ctx, tint(cell.content, cl.textColor, cl.bold)) || `<text:p text:style-name="${ctx.paraStyle("Standard")}"/>`;
+      out += `<table:table-cell table:style-name="${ctx.cellStyle({ fill: cl.fill, top: line(cl.top), bottom: line(cl.bottom), left: line(cl.left), right: line(cl.right) })}" office:value-type="string"${cs > 1 ? ` table:number-columns-spanned="${cs}"` : ""}${rs > 1 ? ` table:number-rows-spanned="${rs}"` : ""}>${body}</table:table-cell>`;
       for (let i = 1; i < cs; i++) out += "<table:covered-table-cell/>";
       for (let i = 0; i < cs; i++) pending[col + i] = rs > 1 ? rs - 1 : 0;
       col += cs;
@@ -304,13 +310,13 @@ function table(ctx: Ctx, n: PM): string {
   };
   const headerRows = rows.filter((r) => r.content?.length && r.content.every((c) => c.type === "tableHeader"));
   const leading = headerRows.length && rows.slice(0, headerRows.length).every((r) => headerRows.includes(r)) ? headerRows.length : 0;
-  const head = rows.slice(0, leading).map(renderRow).join("");
-  const rest = rows.slice(leading).map(renderRow).join("");
+  const head = rows.slice(0, leading).map((r, i) => renderRow(r, i)).join("");
+  const rest = rows.slice(leading).map((r, i) => renderRow(r, i + leading)).join("");
   const widths = (rows[0]?.content ?? []).map((c) => (Array.isArray(c.attrs?.colwidth) ? (c.attrs!.colwidth as number[]).reduce((a, b) => a + b, 0) : 0));
   const known = widths.length === cols && widths.every((w) => w > 0);
   if (known) widths.forEach((w, i) => ctx.colStyles.push(`<style:style style:name="${ctx.prefix}TblCol${i + 1}_${id}" style:family="table-column"><style:table-column-properties style:column-width="${pxToCm(w)}cm"/></style:style>`));
   const colDefs = known ? widths.map((_, i) => `<table:table-column table:style-name="${ctx.prefix}TblCol${i + 1}_${id}"/>`).join("") : `<table:table-column table:number-columns-repeated="${cols}"/>`;
-  return `<table:table table:name="Table${id}" table:style-name="Tbl">${colDefs}${leading ? `<table:table-header-rows>${head}</table:table-header-rows>` : ""}${rest}</table:table>`;
+  return `<table:table table:name="Table${id}" table:style-name="${place ? `${ctx.prefix}TblP${id}` : "Tbl"}">${colDefs}${leading ? `<table:table-header-rows>${head}</table:table-header-rows>` : ""}${rest}</table:table>`;
 }
 
 function listStyles(): string {
@@ -351,16 +357,16 @@ function automaticStyles(ctx: Ctx, model: DocumentModel): string {
     .join("");
   const cellStyles = [...ctx.cellStyles]
     .map(([key, name]) => {
-      const [head, shading, borderless] = key.split("|");
-      const bg = shading || (head === "true" ? "#f3f4f6" : "");
-      return `<style:style style:name="${name}" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="${borderless === "1" ? "none" : "0.5pt solid #d1d5db"}"${bg ? ` fo:background-color="${esc(bg)}"` : ""}/></style:style>`;
+      const c = JSON.parse(key) as { fill: string | null; top: string; bottom: string; left: string; right: string };
+      const border = c.top === c.bottom && c.top === c.left && c.top === c.right ? `fo:border="${c.top}"` : `fo:border-top="${c.top}" fo:border-bottom="${c.bottom}" fo:border-left="${c.left}" fo:border-right="${c.right}"`;
+      return `<style:style style:name="${name}" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" ${border}${c.fill ? ` fo:background-color="${esc(c.fill)}"` : ""}/></style:style>`;
     })
     .join("");
   return `${textStyles}${paraStyles}${listStyles()}${ctx.colStyles.join("")}${cellStyles}${ctx.graphicStyles.join("")}
 <style:style style:name="PgBreak" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:break-after="page"/></style:style>
 <style:style style:name="Tbl" style:family="table"><style:table-properties style:width="${pxToCm(pageDimensions(model.page).w - marginsPx(model.page).left - marginsPx(model.page).right)}cm" table:align="margins"/></style:style>
-<style:style style:name="Cell" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #d1d5db"/></style:style>
-<style:style style:name="CellHead" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #d1d5db" fo:background-color="#f3f4f6"/></style:style>`;
+<style:style style:name="Cell" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #000000"/></style:style>
+<style:style style:name="CellHead" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #000000" fo:background-color="#f3f4f6"/></style:style>`;
 }
 
 function namedStyles(model: DocumentModel, hfXml: string, hfStyles: string, gradients: string): string {

@@ -15,6 +15,8 @@ import type { Anchor } from "../ui/Popover";
 import { PageSheets, type HeaderFooterHeights } from "./PageSheets";
 import { Ruler } from "./Ruler";
 import { ShapeToolbar } from "./ShapeToolbar";
+import { TableMoveHandle } from "./TableMoveHandle";
+import { TableInsertHandles } from "./TableInsertHandles";
 import { TableToolbar } from "./TableToolbar";
 
 /** Draws the user's style overrides, and re-paginates since they change line and paragraph heights. */
@@ -122,6 +124,8 @@ export function DocumentCanvas() {
     <div className="relative min-w-0 flex-1 overflow-auto bg-canvas [scrollbar-gutter:stable]" data-canvas>
       {state.ruler && <Ruler pageWidth={geometry.width} marginLeft={geometry.insetLeft} marginRight={geometry.insetRight} zoom={state.zoom} />}
       {editor && snap.inTable && <TableToolbar editor={editor} />}
+      {editor && <TableInsertHandles editor={editor} />}
+      {editor && <TableMoveHandle editor={editor} />}
       <DocStylesCss />
       {editor && <ShapeToolbar editor={editor} />}
       <div className="flex w-max min-w-full justify-center px-8 py-6">

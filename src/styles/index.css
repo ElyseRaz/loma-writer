@@ -196,7 +196,12 @@ select {
 .paper .ProseMirror hr { border: 0; border-top: 1px solid #d1d5db; margin: 1.2em 0; }
 .paper .ProseMirror img { max-width: 100%; height: auto; }
 .paper .ProseMirror img.ProseMirror-selectednode { outline: 2px solid #2563eb; }
+/* A table never exceeds the text width (the editor adds min-widths that would push it out of the page). */
+.paper .ProseMirror .tableWrapper { max-width: 100%; }
+.paper .ProseMirror table col { min-width: 0 !important; }
 .paper .ProseMirror table {
+  min-width: 0 !important;
+  max-width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
   width: 100%;
@@ -204,12 +209,25 @@ select {
 }
 .paper .ProseMirror th,
 .paper .ProseMirror td {
-  border: 1px solid #d1d5db;
+  border: 1px solid #000;
   padding: 6px 10px;
   vertical-align: top;
   position: relative;
 }
-.paper .ProseMirror th { background: #f3f4f6; font-weight: 600; text-align: left; }
+.paper .ProseMirror th { background: var(--tb-head, #f3f4f6); color: var(--tb-headtext, inherit); font-weight: 600; text-align: left; }
+/* Table styles (attribute `look`, see tableStyles.ts): the table view's wrapper carries the data attributes and colour variables. */
+.paper .ProseMirror [data-look] th, .paper .ProseMirror [data-look] td { border: var(--tb-w, 1px) solid var(--tb-c, #000); }
+.paper .ProseMirror [data-borders="horizontal"] th, .paper .ProseMirror [data-borders="horizontal"] td { border-left: 0; border-right: 0; }
+.paper .ProseMirror [data-borders="outer"] table { border: var(--tb-w, 1px) solid var(--tb-c, #000); }
+.paper .ProseMirror [data-borders="outer"] th, .paper .ProseMirror [data-borders="outer"] td,
+.paper .ProseMirror [data-borders="none"] th, .paper .ProseMirror [data-borders="none"] td { border: 0; }
+.paper .ProseMirror [data-borders="none"] th, .paper .ProseMirror [data-borders="none"] td { box-shadow: inset 0 0 0 1px #e5e7eb; }
+@media print { .paper .ProseMirror [data-borders="none"] th, .paper .ProseMirror [data-borders="none"] td { box-shadow: none; } }
+.paper .ProseMirror [data-banded] tr:nth-child(even of :not(.pg-spacer)) td { background: var(--tb-band); }
+.paper .ProseMirror [data-firstcol] td:first-child { font-weight: 600; }
+/* A table moved freely (even into the margins) keeps the width it was given. */
+.paper .ProseMirror .tableWrapper[data-placed] { max-width: none; }
+.paper .ProseMirror .tableWrapper[data-placed] table { max-width: none; }
 .paper .ProseMirror td > p, .paper .ProseMirror th > p { margin: 0; }
 .paper .ProseMirror .selectedCell::after {
   content: "";
@@ -333,3 +351,8 @@ select {
 .paper .ProseMirror ol[data-list-type="upper-alpha"] { list-style-type: upper-alpha; }
 .paper .ProseMirror ol[data-list-type="lower-roman"] { list-style-type: lower-roman; }
 .paper .ProseMirror ol[data-list-type="upper-roman"] { list-style-type: upper-roman; }
+
+/* Column resizing: the border being moved is drawn in blue (while hovering it and while dragging). */
+.paper .ProseMirror .column-resize-handle { position: absolute; top: -1px; bottom: -1px; right: -2px; width: 4px; background: #2563eb; pointer-events: none; z-index: 5; }
+.paper .ProseMirror.resize-cursor { cursor: col-resize; }
+.paper .ProseMirror .tableWrapper { position: relative; }
