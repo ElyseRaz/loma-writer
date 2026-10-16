@@ -39,7 +39,19 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
   const res = (p: number) => reserved.get(p) ?? 0;
   /** What the page still has to give up for `add` more px of notes (the first note also brings the separator). */
   const noteCost = (p: number, add: number) => (add > 0 ? add + (res(p) === 0 ? FOOTNOTE_SEPARATOR : 0) : 0);
-  const reserve = (p: number, cost: number) => { if (cost > 0) reserved.set(p, res(p) + cost); };
+  /** Notes may take half a page at most; what is more goes on at the bottom of the next page (their continuation). */
+  const settle = (map: Map<number, number>, p: number) => {
+    const cap = 0.5 * H;
+    for (let q = p, guard = 0; guard < 50; q++, guard++) {
+      const v = map.get(q) ?? 0;
+      if (v <= cap + EPS) return;
+      map.set(q, cap);
+      map.set(q + 1, (map.get(q + 1) ?? 0) + (v - cap) + ((map.get(q + 1) ?? 0) === 0 ? FOOTNOTE_SEPARATOR : 0));
+    }
+  };
+  /** What of a cost must fit on the page itself: the rest of a huge note goes on to the next page. */
+  const fitCost = (p: number, cost: number) => Math.min(cost, Math.max(0, 0.5 * H - res(p)));
+  const reserve = (p: number, cost: number) => { if (cost > 0) { reserved.set(p, res(p) + cost); settle(reserved, p); } };
   const sumNotes = (a: Atom, from: number, to: number) => { const nh = a.noteHeights?.(); if (!nh) return 0; let s = 0; for (let k = from; k < to && k < nh.length; k++) s += nh[k] || 0; return s; };
 
   let offset = 0;
@@ -90,7 +102,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
     forcePage = -1;
     if (atoms[i0].breakBefore && y0 - contentTop(p0) > EPS) { p0 += 1; y0 = contentTop(p0); }
 
-    interface Flow { pl: Array<Placement | null>; endPage: number; endY: number; overflow: boolean; lastPageFrom: number; lastPageLine: number; used: number }
+    interface Flow { loc: Map<number, number>; pl: Array<Placement | null>; endPage: number; endY: number; overflow: boolean; lastPageFrom: number; lastPageLine: number; used: number }
 
     /**
      * One pass over atoms k0..k1: `fixed` (balancing) gives every column of the first page that height; `line0` starts the first
@@ -106,8 +118,12 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
       let lastPageFrom = k0;
       let lastPageLine = line0;
       let maxUsed = 0; // lowest point used by any column of the current page
+      // Footnotes: the room of a page is reduced for all its columns by the notes of what is placed on it (a copy per pass).
+      const loc = new Map(reserved);
+      const lr = (page: number) => loc.get(page) ?? 0;
+      const lcost = (page: number, add: number) => (add > 0 ? add + (lr(page) === 0 ? FOOTNOTE_SEPARATOR : 0) : 0);
       const colTop = (page: number) => (page === pStart ? yStart : contentTop(page));
-      const cap = (page: number) => (page === pStart && fixed !== null ? fixed : contentTop(page) + H - colTop(page));
+      const cap = (page: number) => (page === pStart && fixed !== null ? fixed : contentTop(page) + H - colTop(page) - lr(page));
       const newPage = (k: number, line: number) => { p += 1; c = 0; y = 0; firstInCol = true; maxUsed = 0; lastPageFrom = k; lastPageLine = line; };
       const next = (k: number, line: number) => { c += 1; if (c >= N) newPage(k, line); else { y = 0; firstInCol = true; } };
       for (let k = k0; k < k1; k++) {
@@ -128,6 +144,8 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
           // A table that goes on at the top of a column repeats its header rows there: room is kept above the row.
           const head = firstInCol && startLine === 0 && (a.repeat ?? 0) > 0 && a.repeat! <= 0.4 * H && k > 0 && atoms[k - 1].kind === "row" && atoms[k - 1].tableId === a.tableId ? a.repeat! : 0;
           let need = gap + h + head;
+          const wholeNotes = lines ? sumNotes(a, startLine, lines.length) : a.noteTotal ?? 0;
+          const wholeCost = lcost(p, wholeNotes);
           // A heading must keep the start of what follows with it.
           if (a.keepWithNext && k + 1 < k1 && !firstInCol) {
             const n = atoms[k + 1];
@@ -135,7 +153,9 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
             if (n.kind === "text" && n.lines) { const ls = n.lines(); if (ls.length > orphans) follow = ls[orphans - 1].bottom - n.top; }
             need = gap + h + head + Math.max(0, n.top - a.bottom) + follow;
           }
-          if (need <= room + EPS) {
+          const fitNote = Math.min(wholeCost, Math.max(0, 0.5 * H - lr(p)));
+          if (need + fitNote <= room + EPS && (fitNote === 0 || maxUsed + fitNote <= cap(p) + EPS)) {
+            if (wholeCost) { loc.set(p, lr(p) + wholeCost); settle(loc, p); }
             placed = startLine > 0
               ? { page: p, x: colX(c), y: colTop(p) + y, width: cw, frags: [{ from: startLine, to: lines!.length, page: p, x: colX(c), y: colTop(p) + y }] }
               : { page: p, x: colX(c), y: colTop(p) + y + gap + head, width: cw, ...(head ? { header: head } : {}) };
@@ -146,34 +166,55 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
           // Lines that do not all fit go on, column after column and page after page (orphans and widows respected).
           if (lines && lines.length - startLine >= 2) {
             const total = lines.length;
-            const frags: Fragment[] = [];
-            const used: number[] = []; // bottom of each fragment, from the top of its column
+            let frags: Fragment[] = [];
+            let used: number[] = []; // bottom of each fragment, from the top of its column
             const base = y + gap;
-            let idx = startLine;
-            let sp = p;
-            let sc = c;
             let ok = true;
-            while (idx < total) {
-              const first = frags.length === 0;
-              const top = first ? base : 0;
-              const capacity = cap(sp) - top;
-              let n = 0;
-              while (idx + n < total && linesBottom(lines, idx, idx + n + 1) <= capacity + EPS) n++;
-              const at = { page: sp, x: colX(sc), y: first ? colTop(sp) + base : colTop(sp) };
-              if (idx + n >= total) { frags.push({ from: idx, to: total, ...at }); used.push(top + linesBottom(lines, idx, total)); break; }
-              if (total - (idx + n) < widows) n = total - idx - widows;
-              const minHere = idx === 0 ? orphans : 1;
-              if (n < minHere) {
-                if (first && !firstInCol) { ok = false; break; } // not here: try the next column
-                n = Math.max(1, Math.min(minHere, total - idx - 1)); // a fresh column too short: take what is required anyway
-                overflow = true;
+            let ov = false;
+            // The notes of the lines placed on a page take room from all its columns: the cut is redone with what they really need.
+            const extra = new Map<number, number>();
+            for (let attempt = 0; attempt < 6; attempt++) {
+              frags = [];
+              used = [];
+              ok = true;
+              ov = false;
+              let idx = startLine;
+              let sp = p;
+              let sc = c;
+              while (idx < total) {
+                const first = frags.length === 0;
+                const top = first ? base : 0;
+                const capacity = cap(sp) - (extra.get(sp) ?? 0) - top;
+                let n = 0;
+                while (idx + n < total && linesBottom(lines, idx, idx + n + 1) <= capacity + EPS) n++;
+                const at = { page: sp, x: colX(sc), y: first ? colTop(sp) + base : colTop(sp) };
+                if (idx + n >= total) { frags.push({ from: idx, to: total, ...at }); used.push(top + linesBottom(lines, idx, total)); break; }
+                if (total - (idx + n) < widows) n = total - idx - widows;
+                const minHere = idx === 0 ? orphans : 1;
+                if (n < minHere) {
+                  if (first && !firstInCol) { ok = false; break; } // not here: try the next column
+                  n = Math.max(1, Math.min(minHere, total - idx - 1)); // a fresh column too short: take what is required anyway
+                  ov = true;
+                }
+                frags.push({ from: idx, to: idx + n, ...at });
+                used.push(top + linesBottom(lines, idx, idx + n));
+                idx += n;
+                sc += 1;
+                if (sc >= N) { sc = 0; sp += 1; }
               }
-              frags.push({ from: idx, to: idx + n, ...at });
-              used.push(top + linesBottom(lines, idx, idx + n));
-              idx += n;
-              sc += 1;
-              if (sc >= N) { sc = 0; sp += 1; }
+              if (!ok) break;
+              // the notes this cut puts on each page
+              const need = new Map<number, number>();
+              for (const f of frags) need.set(f.page, (need.get(f.page) ?? 0) + sumNotes(a, f.from, f.to));
+              let grew = false;
+              for (const [pg, add] of need) {
+                const c2 = lcost(pg, add);
+                if (c2 > (extra.get(pg) ?? 0) + EPS) { extra.set(pg, c2); grew = true; }
+              }
+              if (!grew) break;
             }
+            if (ov) overflow = true;
+            if (ok) for (const [pg, c2] of extra) if (c2 > 0) { loc.set(pg, lr(pg) + c2); settle(loc, pg); }
             if (ok) {
               const last = frags[frags.length - 1];
               placed = { page: frags[0].page, x: frags[0].x, y: frags[0].y, width: cw, frags };
@@ -201,7 +242,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
         pl.push(placed);
         maxUsed = Math.max(maxUsed, y);
       }
-      return { pl, endPage: p, endY: colTop(p) + maxUsed, overflow, lastPageFrom, lastPageLine, used: maxUsed };
+      return { loc, pl, endPage: p, endY: colTop(p) + maxUsed, overflow, lastPageFrom, lastPageLine, used: maxUsed };
     };
 
     let res = flow(i0, i1, p0, y0, null);
@@ -229,6 +270,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
       }
     }
 
+    for (const [pg, v] of res.loc) if (v > (reserved.get(pg) ?? 0)) reserved.set(pg, v);
     res.pl.forEach((pl, k) => { placements[i0 + k] = pl; startPage[i0 + k] = pl ? pl.page : p0; });
     atoms.slice(i0, i1).forEach((a, k) => { if (res.pl[k] && a.bottom - a.top > H) oversize.push(i0 + k); });
     const yEnd = res.endY;
@@ -299,7 +341,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
       const noteAdd = lines ? sumNotes(a, linesDone, lines.length) : a.noteTotal ?? 0;
       const noteNeed = noteCost(p, noteAdd);
 
-      if (bottom + noteNeed <= limit + EPS) {
+      if (bottom + fitCost(p, noteNeed) <= limit + EPS) {
         // Fits. A heading still has to stay with the beginning of what follows.
         if (linesDone === 0 && a.keepWithNext && remainingTop > pageTop + EPS && remainingTop + keepExtent(i) > limit + EPS) {
           move(contentTop(p + 1) - top, null);
@@ -316,7 +358,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
         let acc = 0; // notes of the lines kept on this page
         for (let k = linesDone; k < total; k++) {
           acc += a.noteHeights?.()[k] ?? 0;
-          if (lines[k].bottom + offset + noteCost(p, acc) > limit + EPS) break;
+          if (lines[k].bottom + offset + fitCost(p, noteCost(p, acc)) > limit + EPS) break;
           fit = k + 1;
         }
         let first = fit; // first line that moves to the next page
@@ -373,6 +415,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
   let pages = Math.max(1, pageOf(lastBottom - EPS) + 1, lastRegionPage + 1);
   if (endsWithBreak) pages = Math.max(pages, pageOf(lastBottom) + 2);
   if (endsWithSection) pages = Math.max(pages, cur.startPage + 1);
+  for (const [pg, v] of reserved) if (v > 0) pages = Math.max(pages, pg + 1); // the continuation of a huge note needs its page
 
   // The sheets: where each page is, and how big (engine coordinates: 0 = top of the text area of page 0).
   const sheets: Sheet[] = [];

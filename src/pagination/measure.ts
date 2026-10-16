@@ -50,7 +50,7 @@ export interface Measured {
  * Measures the natural layout (page-break spacers hidden by the caller) as atoms.
  * `origin` is the top of the content flow in client px and `scale` the current zoom.
  */
-export function collectAtoms(view: EditorView, origin: number, scale: number, columnSections: boolean[] = [], noteHeight?: (text: string, n: number) => number): Measured {
+export function collectAtoms(view: EditorView, origin: number, scale: number, columnSections: boolean[] = [], noteHeight?: (note: Record<string, unknown>, section: number) => number): Measured {
   const atoms: Atom[] = [];
   const refs: AtomRef[] = [];
 
@@ -137,7 +137,7 @@ export function collectAtoms(view: EditorView, origin: number, scale: number, co
       // Footnotes anchored in the atom take room at the bottom of the page its line is on.
       const anchors: Array<{ pos: number; h: number }> = [];
       if (noteHeight && kind !== "section" && kind !== "break") node.descendants((child, off) => {
-        if (child.type.name === "footnote" && child.attrs.kind === "foot") anchors.push({ pos: pos + 1 + off, h: noteHeight(String(child.attrs.text ?? ""), +child.attrs.n || 1) });
+        if (child.type.name === "footnote" && child.attrs.kind === "foot") anchors.push({ pos: pos + 1 + off, h: noteHeight(child.attrs, sectionCounter) });
         return true;
       });
       if (anchors.length) {

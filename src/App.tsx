@@ -7,6 +7,7 @@ import { CommandPalette } from "./components/dialogs/CommandPalette";
 import { HeaderFooterDialog } from "./components/dialogs/HeaderFooterDialog";
 import { PageSetupDialog } from "./components/dialogs/PageSetupDialog";
 import { ColumnsDialog } from "./components/dialogs/ColumnsDialog";
+import { NotesOptionsDialog } from "./components/dialogs/NotesOptionsDialog";
 import { PageNumberDialog } from "./components/dialogs/PageNumberDialog";
 import { WatermarkDialog } from "./components/dialogs/WatermarkDialog";
 import { ParagraphDialog } from "./components/dialogs/ParagraphDialog";
@@ -57,6 +58,7 @@ function Shell() {
       {state.dialog === "paragraph" && <ParagraphDialog />}
       {state.dialog === "watermark" && <WatermarkDialog />}
       {state.dialog === "pageNumber" && <PageNumberDialog />}
+      {state.dialog === "notesOptions" && <NotesOptionsDialog />}
       {state.dialog === "columns" && <ColumnsDialog />}
       {state.dialog === "tableSize" && <TableSizeDialog />}
       {state.dialog === "caption" && <CaptionDialog />}

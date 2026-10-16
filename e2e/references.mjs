@@ -188,6 +188,71 @@ ok(await sd.getByLabel("Titre", { exact: true }).inputValue() === "Les chats", "
 await sd.getByRole("button", { name: "Annuler" }).click();
 ok((await run(() => window.__lomaAudit())).problems.length === 0, "and the layout is valid", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
 
+// --- rich notes, numbering options, continuation ---
+await run((h) => window.__lomaEditor.commands.setContent(h), loremP(3) + loremP(3));
+await settle(900);
+await run(() => window.__lomaEditor.commands.setTextSelection(40));
+await page.getByRole("button", { name: /Insère une note en bas de la page/ }).click();
+{
+  const dlg = page.getByRole("dialog");
+  const box = dlg.getByLabel("Texte de la note");
+  await box.click();
+  await page.keyboard.press("Control+b");
+  await page.keyboard.type("Gras", { delay: 30 });
+  await page.keyboard.press("Control+b");
+  await page.keyboard.type(" puis normal", { delay: 30 });
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Second paragraphe.");
+  await dlg.getByRole("button", { name: "Insérer" }).click();
+  await settle(900);
+}
+const rich = await run(() => { const n = document.querySelector(".page-sheet .footnote-item"); return { pars: n.querySelectorAll(".note-par").length, bold: n.querySelector("strong")?.textContent }; });
+ok(rich.pars === 2 && rich.bold === "Gras", `a note keeps its formatting and its paragraphs (${JSON.stringify(rich)})`);
+await run(() => window.__lomaEditor.commands.setTextSelection(900));
+await page.getByRole("button", { name: /Insère une note en bas de la page/ }).click();
+await page.getByRole("dialog").getByLabel("Texte de la note").fill("Autre.");
+await page.getByRole("dialog").getByRole("button", { name: "Insérer" }).click();
+await settle(900);
+await page.getByRole("button", { name: /redémarrage de la numérotation des notes/ }).click();
+{
+  const dlg = page.getByRole("dialog");
+  await dlg.getByLabel("Format des notes de bas de page").selectOption("upperLetter");
+  await dlg.getByLabel("Premier numéro des notes de bas de page").fill("3");
+  await dlg.getByRole("button", { name: "Appliquer" }).click();
+  await settle(900);
+}
+const labels = await run(() => [...document.querySelectorAll(".note-ref.note-foot")].map((e) => e.textContent));
+ok(JSON.stringify(labels) === JSON.stringify(["C", "D"]), `the options change the format and the first number (${labels})`);
+await page.getByRole("button", { name: /redémarrage de la numérotation des notes/ }).click();
+{
+  const dlg = page.getByRole("dialog");
+  await dlg.getByLabel("Numérotation des notes de bas de page").selectOption("page");
+  await dlg.getByLabel("Premier numéro des notes de bas de page").fill("1");
+  await dlg.getByRole("button", { name: "Appliquer" }).click();
+  await settle(1500);
+}
+const perPage = await run(() => [...document.querySelectorAll(".page-sheet")].map((s) => [...s.querySelectorAll(".footnote-num")].map((n) => n.textContent)));
+ok(perPage.flat().length >= 2 && perPage.every((l) => l.every((x, i) => x === String.fromCharCode(65 + i))), `numbering restarts on each page (${JSON.stringify(perPage)})`);
+ok((await run(() => window.__lomaAudit())).problems.length === 0, "and the layout is valid", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
+// a note taller than half a page goes on over the next page
+const huge = Array.from({ length: 60 }, (_, i) => `ligne ${i} de la longue note`).join(" ");
+await run((a) => { const e = window.__lomaEditor; e.commands.setContent("<p>Début du texte.</p>" + "<p>suite</p>".repeat(3)); e.commands.setTextSelection(10); e.commands.insertNote({ kind: "foot", text: a }); }, huge.repeat(8));
+await settle(1500);
+const cont = await run(() => [...document.querySelectorAll(".page-sheet")].map((s) => [...s.querySelectorAll(".footnote-item")].length));
+ok(cont.filter((n) => n > 0).length >= 2, `a very long note goes on over the next page (${cont})`);
+ok((await run(() => window.__lomaAudit())).problems.length === 0, "and nothing overlaps", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
+// notes in a section with columns do not hide the end of the columns
+await run((a) => { const e = window.__lomaEditor; e.commands.setContent(a); e.commands.setTextSelection(1); }, `<p>${lorem.repeat(30)}</p>`);
+await settle(600);
+await run(() => { window.__lomaEditor.commands.setColumns?.({ count: 2, gapCm: 1, line: false }); });
+await settle(1200);
+await run(() => window.__lomaEditor.commands.setTextSelection(30));
+await page.getByRole("button", { name: /Insère une note en bas de la page/ }).click();
+await page.getByRole("dialog").getByLabel("Texte de la note").fill("Note dans les colonnes. ".repeat(8));
+await page.getByRole("dialog").getByRole("button", { name: "Insérer" }).click();
+await settle(1500);
+ok((await run(() => window.__lomaAudit())).problems.length === 0, "a note in a section with columns keeps its room", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
+
 // --- undo ---
 await run(() => window.__lomaEditor.commands.focus());
 await page.keyboard.press("Control+z");

@@ -1,11 +1,14 @@
 import { Extension } from "@tiptap/core";
+import { notesOptionsOf } from "../editor/references/Notes";
+import { formatNoteNumber, noteValue } from "../editor/references/notesNumbering";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { Editor } from "@tiptap/react";
 import { paginate } from "./engine";
 import { collectAtoms, FRAME_PROPS, type AtomRef } from "./measure";
 import type { PageStart } from "./pageIndex";
-import type { Band, PageGeometry, Sheet } from "./model";
+import { bodyOf, type NoteParagraph, renderBody } from "../editor/references/noteBody";
+import { FOOTNOTE_SEPARATOR, type Band, type PageGeometry, type Sheet } from "./model";
 
 export interface PaginationState {
   decos: DecorationSet;
@@ -49,13 +52,19 @@ interface Storage {
   pageStarts: PageStart[];
   /** The footnotes of each page (by page index) as drawn by the last layout, for the sheets to show. */
   pageNotes: Record<number, PageNote[]>;
+  /** Room the last layout kept at the bottom of each page for its notes (separator included). */
+  pageReserved: number[];
 }
 
 /** A footnote as shown at the bottom of its page. */
 export interface PageNote {
   pos: number;
-  n: number;
-  text: string;
+  /** How its number is written. */
+  label: string;
+  body: NoteParagraph[];
+  /** A note that goes on over several pages: pixels of it already shown on the earlier pages, and pixels shown here (all when absent). */
+  skip?: number;
+  clip?: number;
 }
 
 const storageOf = (editor: Editor) => (editor.storage as unknown as { pagination: Storage }).pagination;
@@ -132,7 +141,7 @@ export const Pagination = Extension.create({
   name: "pagination",
 
   addStorage(): Storage {
-    return { geometry: null, geometries: [], scale: 1, dirty: false, pageStarts: [], pageNotes: {} };
+    return { geometry: null, geometries: [], scale: 1, dirty: false, pageStarts: [], pageNotes: {}, pageReserved: [] };
   },
 
   addProseMirrorPlugins() {
@@ -350,14 +359,17 @@ function frame(source: HTMLElement, left: number, top: number, height: number): 
   return el;
 }
 
-/** Height a footnote takes at the bottom of a page of the given text width (measured in a hidden copy of the note's style). */
-function makeNoteMeasurer(view: EditorView, width: number, scale: number): { height: (text: string, n: number) => number; dispose: () => void } {
+/** Height a footnote takes at the bottom of a page of the width of each section (measured in a hidden copy of the note's style). */
+function makeNoteMeasurer(view: EditorView, widths: number[], scale: number): { height: (note: Record<string, unknown>, section: number) => number; dispose: () => void } {
   const host = view.dom.parentElement;
   let probe: HTMLElement | null = null;
   const cache = new Map<string, number>();
   return {
-    height(text, n) {
-      const key = `${n}|${text}`;
+    height(note, section) {
+      const width = widths[Math.min(section, widths.length - 1)] ?? widths[0];
+      const body = bodyOf(note as { body?: unknown; text?: unknown });
+      const label = String(note.label || note.n || "1");
+      const key = `${width}|${label}|${JSON.stringify(body)}`;
       const known = cache.get(key);
       if (known !== undefined) return known;
       if (!host) return 20;
@@ -365,11 +377,10 @@ function makeNoteMeasurer(view: EditorView, width: number, scale: number): { hei
         probe = document.createElement("div");
         probe.className = "footnote-probe";
         probe.setAttribute("aria-hidden", "true");
-        probe.style.cssText = `position:absolute;visibility:hidden;left:-99999px;top:0;width:${width}px`;
         host.appendChild(probe);
       }
-      probe.replaceChildren();
-      probe.append(footnoteItem(n, text));
+      probe.style.cssText = `position:absolute;visibility:hidden;left:-99999px;top:0;width:${width}px`;
+      probe.replaceChildren(footnoteItem(label, body));
       const h = probe.getBoundingClientRect().height / scale;
       cache.set(key, h);
       return h;
@@ -378,14 +389,14 @@ function makeNoteMeasurer(view: EditorView, width: number, scale: number): { hei
   };
 }
 
-/** One footnote as drawn (number and text); the stylesheet gives it its size. */
-export function footnoteItem(n: number, text: string): HTMLElement {
+/** One footnote as drawn (number and paragraphs); the stylesheet gives it its size. */
+export function footnoteItem(label: string, body: NoteParagraph[]): HTMLElement {
   const item = document.createElement("div");
   item.className = "footnote-item";
   const num = document.createElement("span");
   num.className = "footnote-num";
-  num.textContent = String(n);
-  item.append(num, document.createTextNode(` ${text || "\u00a0"}`));
+  num.textContent = label;
+  item.append(...renderBody(body, num));
   return item;
 }
 
@@ -404,9 +415,60 @@ function computePageNotes(view: EditorView, storage: Storage) {
       const y = (el.getBoundingClientRect().top - origin) / scale;
       let page = 0;
       sheets.forEach((s, i) => { if (s.top + s.insetTop <= y + 1) page = i; });
-      (next[page] ??= []).push({ pos, n: +node.attrs.n || 1, text: String(node.attrs.text ?? "") });
+      (next[page] ??= []).push({ pos, label: String(node.attrs.label || node.attrs.n || "1"), body: bodyOf(node.attrs) });
       return false;
     });
+  }
+  // Footnotes that restart on each page are numbered here (the page of a reference is only known from the layout).
+  const foot = notesOptionsOf(view.state.doc).foot;
+  if (foot.restart === "page") {
+    const fixes: Array<{ pos: number; n: number; label: string }> = [];
+    for (const list of Object.values(next)) {
+      list.forEach((note, i) => {
+        const n = noteValue(foot, i);
+        const label = formatNoteNumber(n, foot.format);
+        note.label = label;
+        const node = view.state.doc.nodeAt(note.pos);
+        if (node && (node.attrs.label !== label || node.attrs.n !== n)) fixes.push({ pos: note.pos, n, label });
+      });
+    }
+    if (fixes.length) {
+      const tr = view.state.tr.setMeta("addToHistory", false);
+      for (const f of fixes) tr.setNodeMarkup(f.pos, undefined, { ...view.state.doc.nodeAt(f.pos)!.attrs, n: f.n, label: f.label });
+      queueMicrotask(() => { if (!view.isDestroyed) view.dispatch(tr); });
+    }
+  }
+  // Notes that do not fit in the room of their page go on at the bottom of the next one (the engine kept the room).
+  if (sheets.length) {
+    const widths = storage.geometries.map((g) => g.width - g.insetLeft - g.insetRight);
+    const measurer = makeNoteMeasurer(view, widths, storage.scale || 1);
+    try {
+      let queue: PageNote[] = [];
+      const pages = Math.max(sheets.length, ...Object.keys(next).map((k) => +k + 1));
+      for (let pg = 0; pg < pages; pg++) {
+        const own = next[pg] ?? [];
+        const items = [...queue, ...own];
+        queue = [];
+        if (!items.length) continue;
+        const room = Math.max(0, (storage.pageReserved[pg] ?? 0) - FOOTNOTE_SEPARATOR);
+        const shown: PageNote[] = [];
+        let used = 0;
+        for (const it of items) {
+          const attrs = view.state.doc.nodeAt(it.pos)?.attrs ?? {};
+          const full = measurer.height({ ...attrs, label: it.label }, sheets[Math.min(pg, sheets.length - 1)].section);
+          const skip = it.skip ?? 0;
+          const h = full - skip;
+          if (queue.length === 0 && (used + h <= room + 1 || pg >= pages - 1)) { shown.push(skip ? { ...it, skip, clip: h } : it); used += h; continue; }
+          const vis = queue.length === 0 ? Math.max(0, room - used) : 0;
+          if (vis > 8) { shown.push({ ...it, skip, clip: vis }); used += vis; }
+          queue.push({ ...it, skip: skip + vis });
+        }
+        next[pg] = shown;
+      }
+      if (queue.length) (next[pages - 1] ??= []).push(...queue);
+    } finally {
+      measurer.dispose();
+    }
   }
   if (JSON.stringify(next) !== JSON.stringify(storage.pageNotes)) storage.pageNotes = next;
 }
@@ -481,7 +543,8 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
   let atoms;
   try {
     const origin = view.dom.getBoundingClientRect().top;
-    const notes = makeNoteMeasurer(view, geom.width - geom.insetLeft - geom.insetRight, scale);
+    const geoms = storage.geometries.length ? storage.geometries : [geom];
+    const notes = makeNoteMeasurer(view, geoms.map((g) => g.width - g.insetLeft - g.insetRight), scale);
     try {
       ({ atoms, refs } = collectAtoms(view, origin, scale, storage.geometries.map((g) => !!g.columns && g.columns.count > 1), notes.height));
       result = paginate(atoms, storage.geometries.length ? storage.geometries : geom);
@@ -492,6 +555,7 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
     view.dom.classList.remove("pg-measuring");
   }
 
+  storage.pageReserved = result.reserved;
   storage.pageStarts = refs.map((r, i) => ({ pos: r.pos, page: result.startPage[i] ?? 0 })).sort((a, b) => a.pos - b.pos);
 
   // Merge breaks that land on the same position, and remember where each moved block must end up.

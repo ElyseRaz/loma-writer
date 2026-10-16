@@ -17,6 +17,8 @@ import { baseMarginsCm, cmToPx, gutterOf, isMirrored } from "../../state/page";
 import { imageSize, parseDataUri } from "./xml";
 import type { PM, Mark } from "./pm";
 import { addEndnotes, RawXml } from "./docxPost";
+import { bodyOf, type NoteParagraph } from "../../editor/references/noteBody";
+import { cleanNotesOptions } from "../../editor/references/notesNumbering";
 import { tocBookmark, tocXml } from "./docxToc";
 import { addSourcesPart, bibliographyXml } from "./docxBib";
 import { cleanSources, isCitationStyle, type CitationStyle, type Source } from "../../editor/references/sources";
@@ -49,7 +51,7 @@ interface Ctx {
   citationStyle: CitationStyle;
   /** Footnotes (the docx library writes them) and endnote texts (written by `addEndnotes`). */
   footnotes: Record<number, { children: Paragraph[] }>;
-  endnotes: string[];
+  endnotes: NoteParagraph[][];
   /** The document has a table of contents: headings get the bookmark its entries link to. */
   hasToc: boolean;
   /** Rank of the next heading. */
@@ -91,6 +93,12 @@ const lineHeightOf = (content: PM[]): number | undefined => {
   return undefined;
 };
 
+/** Word's rules for a bookmark name: at most 40 characters, a letter or an underscore first, no spaces or punctuation. */
+const wordBookmarkName = (name: string) => {
+  const clean = name.normalize("NFC").replace(/[^\p{L}\p{N}_]/gu, "_").slice(0, 40);
+  return /^[\p{L}_]/u.test(clean) ? clean : `_${clean}`.slice(0, 40);
+};
+
 function inline(ctx: Ctx, nodes: PM[] = []): ParagraphChild[] {
   const out: ParagraphChild[] = [];
   for (const n of nodes) {
@@ -106,17 +114,17 @@ function inline(ctx: Ctx, nodes: PM[] = []): ParagraphChild[] {
       out.push(new TextRun({ text: ctx.raw.add("CITE", `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ${instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t xml:space="preserve">${t}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`) }));
     }
     else if (n.type === "footnote") {
-      const text = String(n.attrs?.text ?? "");
+      const body = bodyOf((n.attrs ?? {}) as { body?: unknown; text?: unknown });
       if (n.attrs?.kind === "end") {
-        ctx.endnotes.push(text);
+        ctx.endnotes.push(body);
         out.push(new TextRun({ text: ctx.raw.add("ENDREF", `<w:r><w:rPr><w:rStyle w:val="EndnoteReference"/></w:rPr><w:endnoteReference w:id="${ctx.endnotes.length}"/></w:r>`) }));
       } else {
         const id = Object.keys(ctx.footnotes).length + 1;
-        ctx.footnotes[id] = { children: [new Paragraph({ children: [new TextRun(text)] })] };
+        ctx.footnotes[id] = { children: (body.length ? body : [{ type: "paragraph" as const, content: [] }]).map((p) => new Paragraph({ style: "FootnoteText", children: inline(ctx, p.content as PM[]) })) };
         out.push(new FootnoteReferenceRun(id));
       }
     }
-    else if (n.type === "bookmark") out.push(new Bookmark({ id: String(n.attrs?.name ?? "signet"), children: [] }));
+    else if (n.type === "bookmark") out.push(new Bookmark({ id: wordBookmarkName(String(n.attrs?.name ?? "signet")), children: [] }));
     else if (n.type === "equation") {
       // A native Word equation (OMML), built from the KaTeX MathML of the formula.
       const omml = mathmlElementToOmml(parseMathml(latexToMathml(String(n.attrs?.latex ?? ""))).documentElement);
@@ -456,7 +464,7 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
     }),
   });
   let bytes = await ctx.raw.apply(new Uint8Array(await Packer.toArrayBuffer(doc)));
-  bytes = await addEndnotes(bytes, ctx.endnotes);
+  bytes = await addEndnotes(bytes, ctx.endnotes, cleanNotesOptions(model.content.attrs?.notes));
   bytes = await addSourcesPart(bytes, ctx.sources, ctx.citationStyle);
   if (isMirrored(model.page)) bytes = await addMirrorMargins(bytes);
   const wm = cleanWatermark(model.watermark);

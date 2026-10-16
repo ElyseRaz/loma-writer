@@ -16,6 +16,8 @@ import { effectiveMarginsCm, isMirrored, paperCm } from "../../state/page";
 import { pxToCm } from "./page";
 import { formatPageNumber } from "../../pagination/pageNumber";
 import { cleanSources, isCitationStyle, type Source, type SourceType } from "../../editor/references/sources";
+import { bodyOf } from "../../editor/references/noteBody";
+import { cleanNotesOptions, type NoteNumbering } from "../../editor/references/notesNumbering";
 import type { PM, Mark } from "./pm";
 import { latexToMathml } from "../math/mathml";
 import { isKnownShape, NONE, TEXT_BOX } from "../../editor/shapes/catalog";
@@ -149,7 +151,7 @@ function inline(ctx: Ctx, nodes: PM[] = []): string {
       const s = ctx.sources.get(tag);
       const ODF_TYPE: Record<SourceType, string> = { book: "book", article: "article", web: "www", report: "techreport", other: "misc" };
       const attrs = s
-        ? ` text:bibliography-type="${ODF_TYPE[s.type]}" text:author="${esc(s.authors.map((p) => (p.first ? `${p.last}, ${p.first}` : p.last)).join("; "))}" text:title="${esc(s.title)}" text:year="${esc(s.year)}" ${s.type === "article" ? "text:journal" : "text:publisher"}="${esc(s.publisher)}" text:address="${esc(s.city)}" text:volume="${esc(s.volume)}" text:pages="${esc(s.pages)}" text:url="${esc(s.url)}"`
+        ? ` text:bibliography-type="${ODF_TYPE[s.type]}" text:author="${esc(s.authors.map((p) => (p.first ? `${p.last}, ${p.first}` : p.last)).join("; "))}" text:title="${esc(s.title)}" text:year="${esc(s.year)}" ${s.type === "article" ? "text:journal" : "text:publisher"}="${esc(s.publisher)}" text:address="${esc(s.city)}" text:volume="${esc(s.volume)}" text:number="${esc(s.issue)}" text:pages="${esc(s.pages)}" text:url="${esc(s.url)}"`
         : ' text:bibliography-type="misc"';
       out += `<text:bibliography-mark text:identifier="${esc(tag)}"${attrs}${n.attrs?.page ? ` text:custom1="${esc(`page:${n.attrs.page}`)}"` : ""}>${esc(String(n.attrs?.text ?? ""))}</text:bibliography-mark>`;
     }
@@ -157,7 +159,8 @@ function inline(ctx: Ctx, nodes: PM[] = []): string {
       const end = n.attrs?.kind === "end";
       const id = `${end ? "edn" : "ftn"}${++ctx.noteIds}`;
       const label = end ? formatPageNumber(Math.max(1, +n.attrs?.n || 1), "lowerRoman") : String(Math.max(1, +n.attrs?.n || 1));
-      out += `<text:note text:id="${id}" text:note-class="${end ? "endnote" : "footnote"}"><text:note-citation>${label}</text:note-citation><text:note-body><text:p text:style-name="Standard">${esc(String(n.attrs?.text ?? ""))}</text:p></text:note-body></text:note>`;
+      const body = bodyOf((n.attrs ?? {}) as { body?: unknown; text?: unknown });
+      out += `<text:note text:id="${id}" text:note-class="${end ? "endnote" : "footnote"}"><text:note-citation>${esc(String(n.attrs?.label || label))}</text:note-citation><text:note-body>${(body.length ? body : [{ type: "paragraph" as const, content: [] }]).map((p) => `<text:p text:style-name="${ctx.paraStyle("Standard")}">${inline(ctx, p.content as PM[])}</text:p>`).join("")}</text:note-body></text:note>`;
     }
     else if (n.type === "seqField") {
       const label = String(n.attrs?.label ?? "Figure");
@@ -510,6 +513,15 @@ function pageLayout(sec: OdtSection, i: number): string {
   return `<style:page-layout style:name="pm${i + 1}"${usage}><style:page-layout-properties fo:page-width="${+pw.toFixed(3)}cm" fo:page-height="${+ph.toFixed(3)}cm" style:print-orientation="${sec.page.orientation}"${numFormat} fo:margin-top="${+mg.top.toFixed(3)}cm" fo:margin-bottom="${+mg.bottom.toFixed(3)}cm" fo:margin-left="${+mg.left.toFixed(3)}cm" fo:margin-right="${+mg.right.toFixed(3)}cm"/>${hf && hasContent(hf.header) ? '<style:header-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-bottom="0.3cm"/></style:header-style>' : ""}${hf && hasContent(hf.footer) ? '<style:footer-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-top="0.3cm"/></style:footer-style>' : ""}</style:page-layout>`;
 }
 
+const ODF_NOTE_FORMAT: Record<string, string> = { decimal: "1", lowerRoman: "i", upperRoman: "I", lowerLetter: "a", upperLetter: "A", symbols: "*" };
+
+/** The numbering of the notes (format, first number, restart) as `text:notes-configuration`. */
+function notesConfiguration(model: DocumentModel): string {
+  const o = cleanNotesOptions(model.content.attrs?.notes);
+  const one = (cls: "footnote" | "endnote", n: NoteNumbering) => `<text:notes-configuration text:note-class="${cls}" style:num-format="${ODF_NOTE_FORMAT[n.format]}" text:start-value="${n.start - 1}" text:start-numbering-at="${n.restart === "page" ? "page" : n.restart === "section" ? "chapter" : "document"}"${cls === "footnote" ? ' text:footnotes-position="page"' : ""}/>`;
+  return `${one("footnote", o.foot)}${one("endnote", o.end)}`;
+}
+
 function namedStyles(model: DocumentModel, sections: OdtSection[], hfStyles: string, gradients: string): string {
   // The right tab of a table of contents line is at the right edge of the text of the first section.
   const tocWidth = (() => { const paper = paperCm(model.page); const w = model.page.orientation === "landscape" ? paper.height : paper.width; const mg = effectiveMarginsCm(model.page); return `${(w - mg.left - mg.right).toFixed(2)}cm`; })();
@@ -533,6 +545,7 @@ function namedStyles(model: DocumentModel, sections: OdtSection[], hfStyles: str
   return `<?xml version="1.0" encoding="UTF-8"?>
 <office:document-styles ${NS} office:version="1.3">
 <office:styles>
+${notesConfiguration(model)}
 <style:default-style style:family="paragraph"><style:paragraph-properties fo:orphans="2" fo:widows="2"/><style:text-properties fo:font-family="${font}" fo:font-size="${size}pt" fo:language="fr" fo:country="FR"/></style:default-style>
 <style:style style:name="Bibliography_20_1" style:display-name="Bibliography 1" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-left="0.85cm" fo:text-indent="-0.85cm" fo:margin-bottom="0.2cm"/></style:style>
 <style:style style:name="Caption" style:family="paragraph" style:parent-style-name="Standard" style:class="extra"><style:paragraph-properties fo:margin-top="0.1cm" fo:margin-bottom="0.28cm"/><style:text-properties fo:font-size="9pt" fo:font-style="italic" fo:color="#44546a"/></style:style>

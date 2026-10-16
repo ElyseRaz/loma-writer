@@ -475,6 +475,7 @@ select {
 .page-notes, .footnote-probe { font-size: calc(var(--doc-size, 11pt) * 0.85); line-height: 1.35; font-family: var(--doc-font, inherit); }
 .page-notes::before { content: ""; position: absolute; top: 5px; left: 0; width: 33%; border-top: 1px solid #6b7280; }
 .footnote-item { margin: 0 0 2px; }
+.footnote-cut { overflow: hidden; }
 .footnote-num { font-size: 0.8em; vertical-align: super; line-height: 0; margin-right: 0.2em; color: #1d4ed8; }
 .page-notes .footnote-item { cursor: default; }
 

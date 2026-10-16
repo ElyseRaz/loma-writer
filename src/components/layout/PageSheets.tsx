@@ -3,6 +3,8 @@ import { pickHeaderFooter, sectionFor, type HeaderFooterContent, type HeaderFoot
 import type { Watermark } from "../../editor/watermark";
 import { PAGE_GAP, type Band, type PageGeometry, type Sheet } from "../../pagination/model";
 import { displayedNumbers, formatPageNumber } from "../../pagination/pageNumber";
+import type { PageNote } from "../../pagination/extension";
+import { NoteBody } from "./NoteBody";
 import { headerFooterHtml, withPageNumbers } from "../../services/headerFooterHtml";
 
 export interface HeaderFooterHeights {
@@ -76,7 +78,7 @@ export function PageSheets({ sheets, sections, geometries, onHeights, bounds = t
   /** Vertical rules between columns (engine coordinates, like the sheets). */
   bands?: Band[];
   /** Footnotes of each page (by page index). */
-  notes?: Record<number, Array<{ pos: number; n: number; text: string }>>;
+  notes?: Record<number, PageNote[]>;
 }) {
   const pages = sheets.length;
   let sumHeights = 0;
@@ -110,11 +112,14 @@ export function PageSheets({ sheets, sections, geometries, onHeights, bounds = t
               <span key={`${b.top}-${c}`} aria-hidden className="page-column-rule" style={{ left: b.left + (c + 1) * b.width + c * b.gap + b.gap / 2, top: b.top - sheet.top, height: b.height }} />
             )))}
             {notes[i]?.length ? (
-              // The footnotes of the page, at the bottom of the text area (the engine kept room for them); a double-click edits one.
-              <div className="page-notes" style={{ left: sheet.insetLeft, right: sheet.insetRight, bottom: sheet.insetBottom }}>
+              // The footnotes of the page, at the bottom of the text area (the engine kept room for them); Enter or a double-click edits one.
+              <div className="page-notes" role="group" aria-label="Notes de bas de page" style={{ left: sheet.insetLeft, right: sheet.insetRight, bottom: sheet.insetBottom }}>
                 {notes[i].map((note) => (
-                  <div key={note.pos} className="footnote-item" onDoubleClick={() => window.dispatchEvent(new CustomEvent("loma:edit-note", { detail: { pos: note.pos } }))} title="Double-clic pour modifier la note">
-                    <span className="footnote-num">{note.n}</span> {note.text || "\u00a0"}
+                  <div key={`${note.pos}-${note.skip ?? 0}`} className={note.clip !== undefined ? "footnote-item footnote-cut" : "footnote-item"} style={note.clip !== undefined ? { height: note.clip } : undefined} role="button" tabIndex={0} aria-label={`Note ${note.label} : modifier`}
+                    onDoubleClick={() => window.dispatchEvent(new CustomEvent("loma:edit-note", { detail: { pos: note.pos } }))}
+                    onKeyDown={(e) => { if (e.key === "Enter") window.dispatchEvent(new CustomEvent("loma:edit-note", { detail: { pos: note.pos } })); }}
+                    title="Double-clic ou Entrée pour modifier la note">
+                    <div style={note.skip ? { marginTop: -note.skip } : undefined}><NoteBody body={note.body} lead={<span className="footnote-num">{note.label}</span>} /></div>
                   </div>
                 ))}
               </div>

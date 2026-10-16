@@ -17,7 +17,7 @@ import { ColumnBreak, PageBreak } from "./PageBreak";
 import { Pagination } from "../pagination/extension";
 import { References, TableOfContents, TocEntry } from "./references/Toc";
 import { Captions, SeqField } from "./references/Captions";
-import { Endnotes, EndnoteItem, Footnote, Notes } from "./references/Notes";
+import { Endnotes, EndnoteItem, Footnote, Notes, NotesAttributes } from "./references/Notes";
 import { BibEntry, Bibliography, Citation, Citations, SourcesAttributes } from "./references/Citations";
 import { ParagraphFormat } from "./ParagraphFormat";
 import { BlockStyle } from "./BlockStyle";
@@ -66,6 +66,7 @@ export function createExtensions(options: { pagination?: boolean } = {}): Extens
     EndnoteItem,
     Endnotes,
     Notes,
+    NotesAttributes,
     SourcesAttributes,
     Citation,
     BibEntry,

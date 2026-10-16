@@ -422,6 +422,21 @@ describe("columns", () => {
 });
 
 describe("footnotes", () => {
+
+  it("in a section with columns the room of the notes is taken from every column of the page", () => {
+    const two = pageGeometry({ ...DEFAULT_PAGE, columns: { count: 2, gap: 20, line: false } } as never);
+    const lines = 70; // 70 lines (1680px) of 24px fill the 931px columns of one page nearly completely
+    const [p] = flow([lines]);
+    const plain = paginate([p], two);
+    const noted = paginate([{ ...p, noteHeights: () => Array.from({ length: lines }, (_, k) => (k === 0 ? 100 : 0)) }], two);
+    expect(plain.reserved[0] ?? 0).toBe(0);
+    expect(noted.reserved[0]).toBeGreaterThanOrEqual(100);
+    // every fragment ends above the notes of its page
+    for (const f of noted.placements[0]!.frags ?? []) {
+      const last = (p.lines!()[f.to - 1].bottom - p.lines!()[f.from].top);
+      expect(f.y - 0 + last).toBeLessThanOrEqual(f.page * two.pitch + two.contentHeight - noted.reserved[f.page] + 0.5);
+    }
+  });
   /** A paragraph of `n` lines with a note of `h` px anchored in line `at`. */
   const withNote = (a: Atom, at: number, h: number): Atom => ({ ...a, noteHeights: () => Array.from({ length: a.lines!().length }, (_, k) => (k === at ? h : 0)) });
 

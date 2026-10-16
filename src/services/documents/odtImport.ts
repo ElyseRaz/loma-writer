@@ -3,11 +3,14 @@ import { builtinStyle, cleanStyles, STYLE_IDS, type DocStyles, type StyleId } fr
 import { bulletFromChar, numberFromFormat } from "./listFormats";
 import JSZip from "jszip";
 import { pageFromDimensions } from "./page";
+import { cleanLabel } from "../../editor/references/Captions";
+import { bodyText, cleanBody, type NoteParagraph } from "../../editor/references/noteBody";
+import { cleanNotesOptions, DEFAULT_NOTES, type NoteNumbering, type NotesOptions } from "../../editor/references/notesNumbering";
 import { cleanSource, cleanSources, isCitationStyle, type CitationStyle, type Source } from "../../editor/references/sources";
 import { resolveTocTargets, type JsonNode } from "../../editor/references/tocBuild";
 import { ensureBlocks, hasVisibleContent, heading, mergeText, paragraph, splitEquations, textNode, type PM, type RunProps } from "./pm";
 import { corrupt, DocumentError, type ImportResult } from "./types";
-import { first, kids, mimeForPath, parseXml, toDataUri } from "./xml";
+import { assertSafeZip, first, kids, mimeForPath, parseXml, toDataUri } from "./xml";
 import { mathmlOrOmmlLatex } from "./mathImport";
 import { byLocalName } from "../math/mathml";
 import { DEFAULT_SHAPE_STYLE, isKnownShape, NONE, TEXT_BOX } from "../../editor/shapes/catalog";
@@ -516,14 +519,14 @@ function inlineOf(ctx: Ctx, parent: Element, base: RunProps, out: PM[]) {
         if (tag) {
           const type = ({ book: "book", article: "article", www: "web", techreport: "report", phdthesis: "report", mastersthesis: "report" } as Record<string, Source["type"]>)[el.getAttribute("text:bibliography-type") ?? ""] ?? "other";
           const authors = (el.getAttribute("text:author") ?? "").split(/;| and /).map((a) => a.trim()).filter(Boolean).map((a) => { const [last, ...rest] = a.split(","); return { last: last.trim(), first: rest.join(",").trim() }; });
-          const src = cleanSource({ tag, type, authors, title: el.getAttribute("text:title"), year: el.getAttribute("text:year"), publisher: el.getAttribute("text:journal") || el.getAttribute("text:publisher"), city: el.getAttribute("text:address"), volume: el.getAttribute("text:volume"), pages: el.getAttribute("text:pages"), url: el.getAttribute("text:url") });
+          const src = cleanSource({ tag, type, authors, title: el.getAttribute("text:title"), year: el.getAttribute("text:year"), publisher: el.getAttribute("text:journal") || el.getAttribute("text:publisher"), city: el.getAttribute("text:address"), volume: el.getAttribute("text:volume"), issue: el.getAttribute("text:number"), pages: el.getAttribute("text:pages"), url: el.getAttribute("text:url") });
           if (src && !wordField && (src.title || src.authors.length) && !(ctx.sources ??= new Map()).has(tag)) ctx.sources.set(tag, src);
           const page = /^page:(.*)$/.exec(el.getAttribute("text:custom1") ?? "")?.[1] ?? "";
           out.push({ type: "citation", attrs: { tag, page: page.slice(0, 40), text: "" } });
         }
         break;
       }
-      case "text:sequence": { const label = el.getAttribute("text:name") || "Figure"; out.push({ type: "seqField", attrs: { label, n: Math.max(1, parseInt(el.textContent ?? "", 10) || 1) } }); break; }
+      case "text:sequence": { const label = cleanLabel(el.getAttribute("text:name")) ?? "Figure"; out.push({ type: "seqField", attrs: { label, n: Math.max(1, parseInt(el.textContent ?? "", 10) || 1) } }); break; }
       case "text:page-number": if (ctx.fields) out.push({ type: "pageField", attrs: { kind: "page" } }); else inlineOf(ctx, el, base, out); break;
       case "text:page-count": if (ctx.fields) out.push({ type: "pageField", attrs: { kind: "pages" } }); else inlineOf(ctx, el, base, out); break;
       case "text:s": out.push(textNode(" ".repeat(+(el.getAttribute("text:c") ?? 1)), base)); break;
@@ -541,8 +544,9 @@ function inlineOf(ctx: Ctx, parent: Element, base: RunProps, out: PM[]) {
       case "text:note": {
         const kind = el.getAttribute("text:note-class") === "endnote" ? "end" : "foot";
         const body = first(el, "text:note-body");
-        const text = body ? Array.from(body.getElementsByTagName("text:p")).map((p) => p.textContent ?? "").join(" ").replace(/\s+/g, " ").trim() : "";
-        out.push({ type: "footnote", attrs: { kind, text: text.slice(0, 2000), n: 1 } });
+        const paragraphs = body ? Array.from(body.getElementsByTagName("text:p")).slice(0, 20).map((p): NoteParagraph => ({ type: "paragraph", content: ((convertPara(ctx, p).node.content ?? []) as PM[]).map((c) => (c.type === "hardBreak" ? { type: "hardBreak" } : { type: "text", text: c.text ?? "", marks: (c.marks ?? []).map((m) => ({ type: m.type, ...(m.attrs ? { attrs: m.attrs } : {}) })) })) as never })) : [];
+        const noteBody = cleanBody(paragraphs);
+        out.push({ type: "footnote", attrs: { kind, text: bodyText(noteBody), body: noteBody, n: 1, label: "" } });
         break;
       }
       case "office:annotation": ctx.warnings.add("Commentaires : non pris en charge, ignorés."); break;
@@ -824,6 +828,7 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(bytes);
+    assertSafeZip(zip);
   } catch {
     throw corrupt("archive ZIP illisible");
   }
@@ -916,10 +921,21 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
   const metaXml = zip.file("meta.xml") ? await zip.file("meta.xml")!.async("string") : "";
   const userDefined = (name: string) => { try { return Array.from(parseXml(metaXml, "meta.xml").getElementsByTagName("meta:user-defined")).find((e) => e.getAttribute("meta:name") === name)?.textContent ?? null; } catch { return null; } };
   let fromMeta: Source[] = [];
-  try { fromMeta = cleanSources(JSON.parse(userDefined("LomaSources") ?? "[]")); } catch { /* not ours */ }
+  try { const raw = userDefined("LomaSources") ?? "[]"; fromMeta = raw.length > 4_000_000 ? [] : cleanSources(JSON.parse(raw)); } catch { /* not ours */ }
   const merged = cleanSources([...fromMeta, ...(ctx.sources ? [...ctx.sources.values()] : [])]);
   const styleName = userDefined("LomaCitationStyle");
-  const sourceAttrs = merged.length ? { sources: merged, ...(isCitationStyle(styleName) ? { citationStyle: styleName as CitationStyle } : {}) } : null;
+  // Numbering of the notes (`text:notes-configuration` in the styles).
+  const noteConf = (cls: string, base: NoteNumbering): NoteNumbering => {
+    const el = styles ? Array.from(styles.getElementsByTagName("text:notes-configuration")).find((e) => e.getAttribute("text:note-class") === cls) : null;
+    if (!el) return base;
+    const format = ({ "1": "decimal", i: "lowerRoman", I: "upperRoman", a: "lowerLetter", A: "upperLetter", "*": "symbols" } as Record<string, NoteNumbering["format"]>)[el.getAttribute("style:num-format") ?? ""] ?? base.format;
+    const at = el.getAttribute("text:start-numbering-at");
+    const start = parseInt(el.getAttribute("text:start-value") ?? "", 10);
+    return { format, restart: at === "page" ? "page" : at === "chapter" ? "section" : "continuous", start: Number.isInteger(start) && start >= 0 ? start + 1 : base.start };
+  };
+  const noteOptions: NotesOptions = cleanNotesOptions({ foot: noteConf("footnote", DEFAULT_NOTES.foot), end: noteConf("endnote", DEFAULT_NOTES.end) });
+  const notesAttr = JSON.stringify(noteOptions) === JSON.stringify(DEFAULT_NOTES) ? null : noteOptions;
+  const sourceAttrs = merged.length || notesAttr ? { ...(merged.length ? { sources: merged, ...(isCitationStyle(styleName) ? { citationStyle: styleName as CitationStyle } : {}) } : {}), ...(notesAttr ? { notes: notesAttr } : {}) } : null;
   const docStyles = readDocStyles(styles);
   return { model: { content: { type: "doc", content: tocResolved(ensureBlocks(blocks)), ...(sourceAttrs ? { attrs: sourceAttrs } : {}) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(docStyles).length ? { styles: docStyles } : {}) }, warnings: [...ctx.warnings] };
 }

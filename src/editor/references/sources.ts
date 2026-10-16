@@ -1,7 +1,7 @@
 /** Bibliographic sources of a document and the way citations and bibliography entries are written. */
 
 export type SourceType = "book" | "article" | "web" | "report" | "other";
-export type CitationStyle = "apa" | "mla" | "chicago" | "numeric";
+export type CitationStyle = "apa" | "mla" | "chicago" | "iso690" | "numeric";
 
 export const SOURCE_TYPES: Array<{ id: SourceType; label: string }> = [
   { id: "book", label: "Livre" },
@@ -15,7 +15,8 @@ export const CITATION_STYLES: Array<{ id: CitationStyle; label: string; sample: 
   { id: "apa", label: "APA", sample: "(Dupont, 2020)" },
   { id: "mla", label: "MLA", sample: "(Dupont 12)" },
   { id: "chicago", label: "Chicago (auteur-date)", sample: "(Dupont 2020, 12)" },
-  { id: "numeric", label: "Numérique", sample: "[1]" },
+  { id: "iso690", label: "ISO 690 (premier élément et date)", sample: "(DUPONT, 2020)" },
+  { id: "numeric", label: "IEEE (numérique)", sample: "[1]" },
 ];
 
 export interface Person {
@@ -34,6 +35,8 @@ export interface Source {
   publisher: string;
   city: string;
   volume: string;
+  /** Issue (number) of the volume. */
+  issue: string;
   pages: string;
   url: string;
 }
@@ -66,6 +69,7 @@ export function cleanSource(raw: unknown): Source | null {
     publisher: clip(r.publisher),
     city: clip(r.city, 80),
     volume: clip(r.volume, 40),
+    issue: clip(r.issue, 40),
     pages: clip(r.pages, 40),
     url: /^https?:\/\//i.test(clip(r.url, 600)) ? clip(r.url, 600) : "",
   };
@@ -90,26 +94,35 @@ export function newTag(sources: Source[], s: Pick<Source, "authors" | "year" | "
   return `${base}${used.size + 1}`;
 }
 
-const initials = (first: string) => first.split(/[\s-]+/).filter(Boolean).map((p) => `${p[0].toUpperCase()}.`).join(" ");
+/** Initials of a first name: "Jean-Pierre" -> "J.-P.", "Anne Marie" -> "A. M.". */
+const initials = (first: string) => first.split(/\s+/).filter(Boolean).map((w) => w.split("-").filter(Boolean).map((p) => `${p[0].toUpperCase()}.`).join("-")).join(" ");
 
-/** "Dupont", "Dupont et Martin", "Dupont et al." (the "and" of the language: French here). */
-function shortAuthors(authors: Person[], and: string): string {
-  if (!authors.length) return "";
-  if (authors.length === 1) return authors[0].last;
-  if (authors.length === 2) return `${authors[0].last} ${and} ${authors[1].last}`;
-  return `${authors[0].last} et al.`;
+/** Surname in capitals (ISO 690). */
+const caps = (s: string) => s.toLocaleUpperCase("fr");
+
+const locator = (page: string) => (page.trim() ? `p. ${page.trim()}` : "");
+const yearOf = (s: Source, none = "s. d.") => s.year || none;
+
+/** "Dupont", "Dupont et Martin", "Dupont et al." for an in-text citation (`and` joins two authors, `max` is the number of authors listed). */
+function inText(s: Source, and: string, max: number, upper = false): string {
+  const a = s.authors.map((p) => (upper ? caps(p.last) : p.last));
+  if (!a.length) return "";
+  if (a.length > max) return `${a[0]} et al.`;
+  if (a.length === 1) return a[0];
+  return `${a.slice(0, -1).join(", ")}${a.length > 2 ? "," : ""} ${and} ${a[a.length - 1]}`;
 }
 
-/** The text of a citation in the text. `order` is the rank of the source among those cited (numeric style). */
+/** The text of a citation in the text, as the style prescribes. `order` is the rank of the source among those cited (numeric style). */
 export function citationText(s: Source | undefined, style: CitationStyle, page: string, order: number): string {
   if (!s) return "[source manquante]";
   const loc = page.trim();
-  const who = shortAuthors(s.authors, style === "apa" ? "&" : "et") || s.title.slice(0, 30);
+  const title = s.title.length > 30 ? `${s.title.slice(0, 30).trim()}…` : s.title;
   switch (style) {
-    case "numeric": return `[${order}${loc ? `, p. ${loc}` : ""}]`;
-    case "apa": return `(${who}${s.year ? `, ${s.year}` : ""}${loc ? `, p. ${loc}` : ""})`;
-    case "mla": return `(${who}${loc ? ` ${loc}` : ""})`;
-    case "chicago": return `(${who}${s.year ? ` ${s.year}` : ""}${loc ? `, ${loc}` : ""})`;
+    case "numeric": return `[${order}${loc ? `, ${locator(loc)}` : ""}]`;
+    case "apa": return `(${inText(s, "&", 2) || title}, ${yearOf(s)}${loc ? `, ${locator(loc)}` : ""})`;
+    case "mla": return `(${inText(s, "et", 2) || `« ${title} »`}${loc ? ` ${loc}` : ""})`;
+    case "chicago": return `(${inText(s, "et", 3) || title} ${s.year || "s. d."}${loc ? `, ${loc}` : ""})`;
+    case "iso690": return `(${inText(s, "et", 3, true) || caps(title)}, ${yearOf(s)}${loc ? `, ${locator(loc)}` : ""})`;
   }
 }
 
@@ -120,50 +133,73 @@ export interface Segment {
 }
 
 const seg = (text: string, italic = false): Segment[] => (text ? [{ text, ...(italic ? { italic } : {}) }] : []);
-const dot = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`);
+const dot = (t: string) => (!t || /[.!?…]$/.test(t) ? t : `${t}.`);
+const range = (p: string) => p.replace(/(\d)\s*-\s*(\d)/, "$1–$2");
+const sp = (...parts: Segment[][]): Segment[] => parts.flat();
 
 /** The entry of a source in the bibliography, as text pieces. */
 export function entrySegments(s: Source, style: CitationStyle, order: number): Segment[] {
   const a = s.authors;
-  const where = s.city && s.publisher ? `${s.city} : ${s.publisher}` : s.publisher || s.city;
-  const pieces: Segment[][] = [];
-  const authorsInverted = (full: boolean) => a.map((p, i) => (i === 0 ? `${p.last}${p.first ? `, ${full ? p.first : initials(p.first)}` : ""}` : `${full ? p.first : initials(p.first)} ${p.last}`.trim()));
-  const join = (list: string[], and: string) => (list.length <= 1 ? list.join("") : `${list.slice(0, -1).join(", ")}${and}${list[list.length - 1]}`);
+  const article = s.type === "article";
+  const web = s.type === "web";
+  const pubPlace = s.city && s.publisher ? `${s.city}: ${s.publisher}` : s.publisher || s.city;
+  const vol = s.volume;
+  const out: Segment[] = [];
+  const add = (...p: Segment[][]) => out.push(...p.flat());
+  const andOf = (list: string[], and: string, comma = true, comma2 = false) => (list.length <= 1 ? list.join("") : list.length === 2 ? `${list[0]}${comma2 ? "," : ""} ${and} ${list[1]}` : `${list.slice(0, -1).join(", ")}${comma ? "," : ""} ${and} ${list[list.length - 1]}`);
+  const inv = (p: Person, full: boolean) => (p.first ? `${p.last}, ${full ? p.first : initials(p.first)}` : p.last);
+  const nat = (p: Person, full: boolean) => (p.first ? `${full ? p.first : initials(p.first)} ${p.last}` : p.last);
   switch (style) {
     case "apa": {
-      const names = join(a.map((p) => `${p.last}${p.first ? `, ${initials(p.first)}` : ""}`), ", & ");
-      pieces.push(seg(dot(names)), seg(s.year ? ` (${s.year}).` : " (s. d.)."));
-      if (s.type === "article") pieces.push(seg(` ${dot(s.title)} `), seg(s.publisher, true), seg(`${s.volume ? `, ${s.volume}` : ""}${s.pages ? `, ${s.pages}` : ""}.`));
-      else pieces.push(seg(" "), seg(s.title, s.type !== "web" || true), seg(`.${where ? ` ${dot(where)}` : ""}`));
+      // APA 7: up to 20 authors, "&" before the last one (with a comma); 21 or more: the first 19, an ellipsis and the last one.
+      const names = a.length > 20 ? `${a.slice(0, 19).map((p) => inv(p, false)).join(", ")}, … ${inv(a[a.length - 1], false)}` : andOf(a.map((p) => inv(p, false)), "&", true, true);
+      // without an author the title comes first (and the date after it)
+      add(names ? seg(`${dot(names)} `) : sp(seg(s.title, true), seg(". ")), seg(`(${yearOf(s)}). `));
+      if (article) add(seg(`${dot(s.title)} `), seg(s.publisher, true), seg(vol ? `, ` : ""), seg(vol ? `${vol}${s.issue ? "" : ""}` : "", true), seg(s.issue ? `(${s.issue})` : ""), seg(s.pages ? `, ${range(s.pages)}` : ""), seg("."));
+      else add(names ? sp(seg(s.title, true), seg(". ")) : [], web ? sp(seg(s.publisher ? `${dot(s.publisher)}` : "")) : seg(dot(s.publisher)));
       break;
     }
     case "mla": {
-      const names = join(authorsInverted(true), a.length > 2 ? ", et " : " et ");
-      pieces.push(seg(names ? `${dot(names)} ` : ""));
-      if (s.type === "article") pieces.push(seg(`« ${dot(s.title)} » `), seg(s.publisher, true), seg(`${s.volume ? `, vol. ${s.volume}` : ""}${s.year ? `, ${s.year}` : ""}${s.pages ? `, p. ${s.pages}` : ""}.`));
-      else pieces.push(seg(s.title, true), seg(`.${s.publisher ? ` ${s.publisher},` : ""}${s.year ? ` ${s.year}` : ""}.`));
+      // MLA 9: the first author inverted, the others in natural order; three or more: the first one and "et al."
+      const names = a.length > 2 ? `${inv(a[0], true)}, et al` : andOf(a.map((p, i) => (i === 0 ? inv(p, true) : nat(p, true))), "et", false);
+      add(seg(names ? `${dot(names)} ` : ""));
+      if (article) add(seg(`« ${dot(s.title)} » `), seg(s.publisher, true), seg([vol ? `, vol. ${vol}` : "", s.issue ? `, nº ${s.issue}` : "", s.year ? `, ${s.year}` : "", s.pages ? `, p. ${range(s.pages)}` : ""].join("")), seg("."));
+      else if (web) add(seg(`« ${dot(s.title)} » `), seg(s.publisher, true), seg(`${s.year ? `, ${s.year}` : ""}.`));
+      else add(seg(s.title, true), seg(`. ${[s.publisher, s.year].filter(Boolean).join(", ")}${s.publisher || s.year ? "." : ""}`));
       break;
     }
     case "chicago": {
-      const names = join(authorsInverted(true), a.length > 2 ? ", et " : " et ");
-      pieces.push(seg(names ? `${dot(names)} ` : ""), seg(s.year ? `${s.year}. ` : ""));
-      if (s.type === "article") pieces.push(seg(`« ${dot(s.title)} » `), seg(s.publisher, true), seg(`${s.volume ? ` ${s.volume}` : ""}${s.pages ? `: ${s.pages}` : ""}.`));
-      else pieces.push(seg(s.title, true), seg(`.${where ? ` ${dot(where)}` : ""}`));
+      // Chicago author-date: the first author inverted, "and" before the last (comma when there are three or more); without an author the title comes first.
+      const names = andOf(a.map((p, i) => (i === 0 ? inv(p, true) : nat(p, true))), "et", true);
+      const year = seg(`${yearOf(s, "s. d.")}. `);
+      if (article) add(names ? sp(seg(`${dot(names)} `), year) : [], seg(`« ${dot(s.title)} » `), names ? [] : year, seg(s.publisher, true), seg([vol ? ` ${vol}` : "", s.issue ? ` (${s.issue})` : "", s.pages ? `: ${range(s.pages)}` : ""].join("")), seg("."));
+      else if (web) add(names ? sp(seg(`${dot(names)} `), year) : [], seg(`« ${dot(s.title)} » `), names ? [] : year, seg(s.publisher ? `${dot(s.publisher)}` : ""));
+      else add(names ? sp(seg(`${dot(names)} `), year) : [], seg(s.title, true), seg(". "), names ? [] : year, seg(dot(pubPlace)));
+      break;
+    }
+    case "iso690": {
+      // ISO 690 (first element and date): surnames in capitals, "et" before the last author, the place and the publisher after a colon; without an author the title comes first.
+      const names = a.length > 3 ? `${caps(a[0].last)}${a[0].first ? `, ${a[0].first}` : ""} et al.` : andOf(a.map((p) => `${caps(p.last)}${p.first ? `, ${p.first}` : ""}`), "et", false);
+      const year = `${yearOf(s, "s. d.")}. `;
+      const lead = names ? sp(seg(`${names}, `), seg(year)) : [];
+      if (article) add(lead, seg(`${dot(s.title)} `), names ? [] : seg(year), seg(s.publisher, true), seg([vol ? `, ${vol}` : "", s.issue ? `(${s.issue})` : "", s.pages ? `, p. ${range(s.pages)}` : ""].join("")), seg("."));
+      else add(lead, seg(s.title, true), seg(". "), names ? [] : seg(year), seg(s.city && s.publisher ? `${s.city} : ${s.publisher}.` : dot(s.publisher || s.city)));
       break;
     }
     case "numeric": {
-      const names = join(a.map((p) => `${p.first ? `${initials(p.first)} ` : ""}${p.last}`), " et ");
-      pieces.push(seg(`[${order}] ${names ? `${names}, ` : ""}`));
-      if (s.type === "article") pieces.push(seg(`« ${s.title} », `), seg(s.publisher, true), seg(`${s.volume ? `, vol. ${s.volume}` : ""}${s.year ? `, ${s.year}` : ""}${s.pages ? `, p. ${s.pages}` : ""}.`));
-      else pieces.push(seg(s.title, true), seg(`${s.publisher ? `, ${s.publisher}` : ""}${s.year ? `, ${s.year}` : ""}.`));
+      // IEEE: the initials first, "and" before the last author, the title of an article in quotes.
+      const names = a.length > 6 ? `${nat(a[0], false)} et al.` : andOf(a.map((p) => nat(p, false)), "and", false);
+      add(seg(`[${order}] ${names ? `${names}, ` : ""}`));
+      if (article) add(seg(`“${s.title},” `), seg(s.publisher, true), seg([vol ? `, vol. ${vol}` : "", s.issue ? `, no. ${s.issue}` : "", s.pages ? `, pp. ${range(s.pages)}` : "", s.year ? `, ${s.year}` : ""].join("")), seg("."));
+      else add(seg(s.title, true), seg(`. ${[pubPlace, s.year].filter(Boolean).join(", ")}${pubPlace || s.year ? "." : ""}`));
       break;
     }
   }
-  if (s.url) pieces.push(seg(` ${s.url}`));
-  // merge neighbours of the same look
-  const out: Segment[] = [];
-  for (const p of pieces.flat()) { const last = out[out.length - 1]; if (last && !!last.italic === !!p.italic) last.text += p.text; else out.push({ ...p }); }
-  return out.map((p) => ({ ...p, text: p.text.replace(/\s+\./g, ".").replace(/\.\./g, ".").replace(/ {2,}/g, " ") })).filter((p) => p.text);
+  if (s.url) add(seg(` ${s.url}`));
+  // merge neighbours of the same look and tidy the punctuation
+  const merged: Segment[] = [];
+  for (const p of out) { const l = merged[merged.length - 1]; if (l && !!l.italic === !!p.italic) l.text += p.text; else merged.push({ ...p }); }
+  return merged.map((p) => ({ ...p, text: p.text.replace(/\s+([.,;:])/g, "$1").replace(/\.{2,}(?!\.)/g, ".").replace(/\.\s*\./g, ".").replace(/ {2,}/g, " ") })).filter((p) => p.text);
 }
 
 /** Sort key of the bibliography: author, year, title (the numeric style keeps the order of first citation instead). */

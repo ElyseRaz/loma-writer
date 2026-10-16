@@ -30,8 +30,12 @@ dans `src/components/dialogs/` (`CaptionDialog`, `NoteDialog`, `SourcesDialog`) 
   Hauteur mesurée dans une copie cachée au style de la note (`makeNoteMeasurer`).
 - **Notes de fin** : un bloc `endnotes` à la fin du document, régénéré par le plugin (créé, mis à jour ou supprimé avec les renvois).
 - DOCX : vrais `w:footnoteReference` / `footnotes.xml` et `endnotes.xml` (ajouté par `addEndnotes`), ODT : `text:note` des deux classes. Vérifié avec LibreOffice.
-- **Limites** : texte de note brut (une seule ligne de paragraphe, sans mise en forme) ; dans une section à colonnes la place des notes n'est pas réservée
-  (elles peuvent recouvrir le bas des colonnes) ; une note n'est pas coupée d'une page à l'autre ; pas de recommencement de la numérotation par page ou par section.
+- **Texte riche** : le corps d'une note est une liste de paragraphes avec gras, italique, souligné, exposant/indice et liens (`noteBody.ts`) ; éditeur dans `NoteDialog`.
+- **Numérotation** (`notesNumbering.ts`, bouton « Options des notes… ») : format (1, i, I, a, A, symboles), premier numéro, continue / par section / par page (bas de page).
+  Le recommencement par page est calculé par la mise en page (`computePageNotes`). Exporté en `w:footnotePr` / `w:endnotePr` (DOCX) et `text:notes-configuration` (ODT).
+- **Colonnes** : la place des notes est retirée à toutes les colonnes de la page (`flow` du moteur). **Continuation** : les notes ne prennent pas plus d'une demi-page ; le reste
+  continue en bas de la page suivante (`settle`, `PageNote.skip/clip`).
+- **Limites** : la coupure d'une note continuée se fait au pixel (pas à la ligne) ; en colonnes, une note géante qui déborde sur la page suivante n'est vérifiée que par le moteur.
 
 ## Citations et bibliographie
 
@@ -42,11 +46,6 @@ dans `src/components/dialogs/` (`CaptionDialog`, `NoteDialog`, `SourcesDialog`) 
 - DOCX : champs `CITATION tag \l 1036`, champ `BIBLIOGRAPHY`, et partie `customXml/item1.xml` au format bibliographie de Word (type, auteurs, année, éditeur… et style choisi) ;
   ODT : `text:bibliography-mark` (identifiant, auteur, titre, année… ; page dans `custom1`), `text:bibliography`, et toutes les sources + le style dans `meta.xml`.
   Vérifié avec LibreOffice (qui garde le renvoi et la bibliographie).
-- **Limites** : les styles de citation sont des approximations françaises de APA, MLA, Chicago et d'un style numérique (pas les feuilles de style officielles de Word) ; Word
-  réécrit les entrées avec les siennes à la mise à jour du champ ; les sources non citées ne passent par ODT que grâce aux métadonnées de Loma Writer ; pas de source à plusieurs
-  types de contributeurs (éditeur scientifique, traducteur).
-
-## Vérifications
-
-`node e2e/references.mjs` (Chrome) ; `python3 e2e/webkit.py` (WebKitGTK : table, légende, notes imprimées sur les bonnes pages) ; tests unitaires :
-`src/editor/__tests__/references.test.ts`, `src/state/__tests__/references.test.ts`, `src/services/documents/__tests__/interop.test.ts` (LibreOffice), moteur : `src/pagination/__tests__/engine.test.ts` (notes).
+- **Styles** (`sources.ts`) : APA 7, MLA 9, Chicago auteur-date, ISO 690 et IEEE (numérique), avec les règles de ponctuation, d'italique et d'ordre des auteurs de ces feuilles de style
+  (en français pour les mots de liaison, sauf IEEE). Word réécrit les entrées avec ses propres feuilles de style à la mise à jour du champ : le texte peut différer légèrement.
+- **Limites** : les sources non citées ne passent par ODT que grâce aux métadonnées de Loma Writer ; pas de source à plusieurs types de contributeurs (éditeur scientifique, traducteur).

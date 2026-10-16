@@ -13,6 +13,7 @@ const WORD_STYLE: Record<CitationStyle, { file: string; name: string }> = {
   apa: { file: "\\APASixthEditionOfficeOnline.xsl", name: "APA" },
   mla: { file: "\\MLASeventhEditionOfficeOnline.xsl", name: "MLA" },
   chicago: { file: "\\ChicagoFifteenthEditionSimple.xsl", name: "Chicago" },
+  iso690: { file: "\\ISO690.XSL", name: "ISO690" },
   numeric: { file: "\\IEEE2006OfficeOnline.xsl", name: "IEEE" },
 };
 
@@ -20,12 +21,13 @@ const WORD_STYLE: Record<CitationStyle, { file: string; name: string }> = {
 export function sourcesXml(sources: Source[], style: CitationStyle): string {
   const ws = WORD_STYLE[style];
   const person = (p: { last: string; first: string }) => `<b:Person><b:Last>${xmlEsc(p.last)}</b:Last>${p.first ? `<b:First>${xmlEsc(p.first)}</b:First>` : ""}</b:Person>`;
-  const items = sources.map((s, i) => `<b:Source><b:Tag>${xmlEsc(s.tag)}</b:Tag><b:SourceType>${WORD_TYPE[s.type]}</b:SourceType>${s.authors.length ? `<b:Author><b:Author><b:NameList>${s.authors.map(person).join("")}</b:NameList></b:Author></b:Author>` : ""}<b:Title>${xmlEsc(s.title)}</b:Title>${s.year ? `<b:Year>${xmlEsc(s.year)}</b:Year>` : ""}${s.city ? `<b:City>${xmlEsc(s.city)}</b:City>` : ""}${s.type === "article" ? `${s.publisher ? `<b:JournalName>${xmlEsc(s.publisher)}</b:JournalName>` : ""}` : s.type === "web" ? `${s.publisher ? `<b:InternetSiteTitle>${xmlEsc(s.publisher)}</b:InternetSiteTitle>` : ""}` : `${s.publisher ? `<b:Publisher>${xmlEsc(s.publisher)}</b:Publisher>` : ""}`}${s.volume ? `<b:Volume>${xmlEsc(s.volume)}</b:Volume>` : ""}${s.pages ? `<b:Pages>${xmlEsc(s.pages)}</b:Pages>` : ""}${s.url ? `<b:URL>${xmlEsc(s.url)}</b:URL>` : ""}<b:RefOrder>${i + 1}</b:RefOrder></b:Source>`).join("");
+  const items = sources.map((s, i) => `<b:Source><b:Tag>${xmlEsc(s.tag)}</b:Tag><b:SourceType>${WORD_TYPE[s.type]}</b:SourceType>${s.authors.length ? `<b:Author><b:Author><b:NameList>${s.authors.map(person).join("")}</b:NameList></b:Author></b:Author>` : ""}<b:Title>${xmlEsc(s.title)}</b:Title>${s.year ? `<b:Year>${xmlEsc(s.year)}</b:Year>` : ""}${s.city ? `<b:City>${xmlEsc(s.city)}</b:City>` : ""}${s.type === "article" ? `${s.publisher ? `<b:JournalName>${xmlEsc(s.publisher)}</b:JournalName>` : ""}` : s.type === "web" ? `${s.publisher ? `<b:InternetSiteTitle>${xmlEsc(s.publisher)}</b:InternetSiteTitle>` : ""}` : `${s.publisher ? `<b:Publisher>${xmlEsc(s.publisher)}</b:Publisher>` : ""}`}${s.volume ? `<b:Volume>${xmlEsc(s.volume)}</b:Volume>` : ""}${s.issue ? `<b:Issue>${xmlEsc(s.issue)}</b:Issue>` : ""}${s.pages ? `<b:Pages>${xmlEsc(s.pages)}</b:Pages>` : ""}${s.url ? `<b:URL>${xmlEsc(s.url)}</b:URL>` : ""}<b:RefOrder>${i + 1}</b:RefOrder></b:Source>`).join("");
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><b:Sources SelectedStyle="${xmlEsc(ws.file)}" StyleName="${ws.name}" xmlns:b="${NS}" xmlns="${NS}">${items}</b:Sources>`;
 }
 
 /** Reads the sources (and the selected style) of a bibliography part; null when the XML is not one. */
 export function readSourcesXml(xml: string): { sources: Source[]; style: CitationStyle | null } | null {
+  if (xml.length > 4_000_000) return null; // far more than 500 sources: not a list of ours
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   if (doc.getElementsByTagName("parsererror").length) return null;
   const root = Array.from(doc.getElementsByTagName("*")).find((e) => e.localName === "Sources");
@@ -35,10 +37,10 @@ export function readSourcesXml(xml: string): { sources: Source[]; style: Citatio
   const raw = kids(root).filter((k) => k.localName === "Source").map((s) => {
     const people = Array.from(s.getElementsByTagName("*")).filter((e) => e.localName === "Person").map((p) => ({ last: text(p, "Last"), first: text(p, "First") }));
     const type = FROM_WORD[text(s, "SourceType")] ?? "other";
-    return { tag: text(s, "Tag"), type, authors: people, title: text(s, "Title"), year: text(s, "Year"), city: text(s, "City"), publisher: type === "article" ? text(s, "JournalName") || text(s, "JournalTitle") : type === "web" ? text(s, "InternetSiteTitle") || text(s, "WebSiteTitle") : text(s, "Publisher"), volume: text(s, "Volume"), pages: text(s, "Pages"), url: text(s, "URL") };
+    return { tag: text(s, "Tag"), type, authors: people, title: text(s, "Title"), year: text(s, "Year"), city: text(s, "City"), publisher: type === "article" ? text(s, "JournalName") || text(s, "JournalTitle") : type === "web" ? text(s, "InternetSiteTitle") || text(s, "WebSiteTitle") : text(s, "Publisher"), volume: text(s, "Volume"), issue: text(s, "Issue"), pages: text(s, "Pages"), url: text(s, "URL") };
   });
   const name = (root.getAttribute("StyleName") ?? "").toLowerCase();
-  const style: CitationStyle | null = isCitationStyle(name) ? name : name === "ieee" || name === "iso690" ? "numeric" : name.startsWith("chicago") ? "chicago" : null;
+  const style: CitationStyle | null = isCitationStyle(name) ? name : name === "ieee" ? "numeric" : name.startsWith("iso690") || name.startsWith("iso 690") ? "iso690" : name.startsWith("chicago") ? "chicago" : null;
   return { sources: cleanSources(raw), style };
 }
 

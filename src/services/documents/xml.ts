@@ -56,3 +56,20 @@ export function imageSize(bytes: Uint8Array): { w: number; h: number } | null {
   }
   return null;
 }
+
+const MAX_ENTRIES = 5000;
+const MAX_ENTRY_BYTES = 200 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 800 * 1024 * 1024;
+
+/** Refuses an archive that announces more than a document can reasonably hold (a "zip bomb" would freeze the page when read). */
+export function assertSafeZip(zip: { files: Record<string, unknown> }): void {
+  const names = Object.keys(zip.files);
+  if (names.length > MAX_ENTRIES) throw new Error("archive");
+  let total = 0;
+  for (const n of names) {
+    const size = (zip.files[n] as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0;
+    if (size > MAX_ENTRY_BYTES) throw new Error("archive");
+    total += size;
+    if (total > MAX_TOTAL_BYTES) throw new Error("archive");
+  }
+}

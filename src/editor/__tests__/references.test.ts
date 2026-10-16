@@ -164,10 +164,10 @@ describe("citations et bibliographie", () => {
     e.commands.insertCitation({ tag: "Dupont2020" });
     e.commands.insertCitation({ tag: "Bernard2019" });
     e.commands.insertBibliography();
-    expect(entries(e)).toEqual(["Bernard, L. (2019). Sur les chiens. Revue canine, 12, 33-48.", "Dupont, J., & Martin, A. (2020). Les chats. Paris : Éditions du Seuil."]);
+    expect(entries(e)).toEqual(["Bernard, L. (2019). Sur les chiens. Revue canine, 12, 33–48.", "Dupont, J., & Martin, A. (2020). Les chats. Éditions du Seuil."]);
     const italics: string[] = [];
     e.state.doc.descendants((n) => { if (n.type.name === "text" && n.marks.some((m) => m.type.name === "italic")) italics.push(n.text!); });
-    expect(italics).toEqual(["Revue canine", "Les chats"]);
+    expect(italics).toEqual(["Revue canine", "12", "Les chats"]);
     // a source cited in addition appears; the "all sources" mode lists the others too
     e.commands.setSources([...sources, { ...sources[0], tag: "Autre", authors: [{ last: "Zola", first: "Émile" }], title: "Nana", year: "1880" }] as never);
     expect(entries(e)).toHaveLength(2);
@@ -184,7 +184,7 @@ describe("citations et bibliographie", () => {
     e.commands.setCitationStyle("numeric");
     e.commands.insertBibliography();
     expect(cites(e)).toEqual(["[1]", "[2]"]);
-    expect(entries(e)[0].startsWith("[1] J. Dupont et A. Martin")).toBe(true);
+    expect(entries(e)[0].startsWith("[1] J. Dupont and A. Martin")).toBe(true);
     expect(entries(e)[1].startsWith("[2] L. Bernard")).toBe(true);
   });
 });

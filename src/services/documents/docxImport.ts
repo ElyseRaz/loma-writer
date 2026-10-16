@@ -6,13 +6,16 @@ import { bulletFromChar, numberFromFormat } from "./listFormats";
 import JSZip from "jszip";
 import { pageFromDimensions } from "./page";
 import { readSourcesXml } from "./docxBib";
+import { cleanLabel } from "../../editor/references/Captions";
+import { bodyText, cleanBody, type NoteParagraph } from "../../editor/references/noteBody";
+import { cleanNotesOptions, DEFAULT_NOTES, type NoteNumbering, type NotesOptions } from "../../editor/references/notesNumbering";
 import type { CitationStyle, Source } from "../../editor/references/sources";
 import { resolveTocTargets, type JsonNode } from "../../editor/references/tocBuild";
 import { MAX_COLUMNS } from "../../state/page";
 import { mathmlOrOmmlLatex } from "./mathImport";
 import { ListBuilder, ensureBlocks, hasVisibleContent, heading, mergeText, paragraph, splitEquations, textNode, type PM, type RunProps } from "./pm";
 import { corrupt, DocumentError, type ImportResult } from "./types";
-import { attr, child, first, kids, mimeForPath, parseXml, toDataUri } from "./xml";
+import { assertSafeZip, attr, child, first, kids, mimeForPath, parseXml, toDataUri } from "./xml";
 import { DEFAULT_SHAPE_STYLE, isKnownShape, NONE, TEXT_BOX } from "../../editor/shapes/catalog";
 import type { Gradient, Shadow } from "../../editor/shapes/types";
 import { sanitizeHeaderFooter, type HeaderFooterSet, type HeaderFooterSettings } from "../../pagination/headerFooter";
@@ -53,20 +56,50 @@ interface Ctx {
   docFont?: string | null;
   /** Section breaks to emit after the paragraphs that end a section (body only); consumed in order. */
   sectionNodes?: PM[];
-  /** The text of the footnotes and endnotes of the file, by id. */
-  notes?: { foot: Map<string, string>; end: Map<string, string> };
+  /** The footnotes and endnotes of the file (their XML), by id. */
+  notes?: { foot: Map<string, Element>; end: Map<string, Element> };
 }
 
-/** The notes of `footnotes.xml` / `endnotes.xml`: their text (the paragraphs joined by a space, without the reference mark). */
-function readNotes(xml: string | null, tag: "w:footnote" | "w:endnote"): Map<string, string> {
-  const out = new Map<string, string>();
+const MAX_NOTES = 5000;
+
+/** The notes of `footnotes.xml` / `endnotes.xml` (separators left out), by id. */
+function readNotes(xml: string | null, tag: "w:footnote" | "w:endnote"): Map<string, Element> {
+  const out = new Map<string, Element>();
   if (!xml) return out;
   for (const n of Array.from(parseXml(xml, "notes.xml").getElementsByTagName(tag))) {
+    if (out.size >= MAX_NOTES) break;
     if (n.getAttribute("w:type") && n.getAttribute("w:type") !== "normal") continue;
-    const text = Array.from(n.getElementsByTagName("w:p")).map((p) => Array.from(p.getElementsByTagName("w:t")).map((t) => t.textContent ?? "").join("")).join(" ").replace(/\s+/g, " ").trim();
-    out.set(n.getAttribute("w:id") ?? "", text);
+    out.set(n.getAttribute("w:id") ?? "", n);
   }
   return out;
+}
+
+/** The paragraphs of a note, with their formatting (what a note may hold: see `cleanBody`). */
+function noteBodyFrom(ctx: Ctx, note: Element): NoteParagraph[] {
+  const paragraphs = Array.from(note.getElementsByTagName("w:p")).slice(0, 20).map((p): NoteParagraph => {
+    const inline: PM[] = [];
+    convertRuns(ctx, p, {}, inline);
+    return { type: "paragraph", content: mergeText(inline).map((n) => (n.type === "hardBreak" ? { type: "hardBreak" } : { type: "text", text: n.text ?? "", marks: (n.marks ?? []).map((m) => ({ type: m.type, ...(m.attrs ? { attrs: m.attrs } : {}) })) })) as never };
+  });
+  return cleanBody(paragraphs);
+}
+
+/** The numbering options of the notes from the settings (`w:footnotePr` / `w:endnotePr`). */
+function readNoteOptions(settings: string | null): NotesOptions | null {
+  if (!settings) return null;
+  const doc = parseXml(settings, "settings.xml");
+  const read = (tag: string, base: NoteNumbering): NoteNumbering => {
+    const pr = first(doc, tag);
+    if (!pr) return base;
+    const fmt = attr(child(pr, "w:numFmt"), "w:val") ?? "";
+    const format = ({ decimal: "decimal", lowerRoman: "lowerRoman", upperRoman: "upperRoman", lowerLetter: "lowerLetter", upperLetter: "upperLetter", chicago: "symbols" } as Record<string, NoteNumbering["format"]>)[fmt] ?? base.format;
+    const restartRaw = attr(child(pr, "w:numRestart"), "w:val");
+    const restart = restartRaw === "eachPage" ? "page" : restartRaw === "eachSect" ? "section" : "continuous";
+    const start = parseInt(attr(child(pr, "w:numStart"), "w:val") ?? "", 10);
+    return { format, restart, start: Number.isInteger(start) && start >= 1 ? start : base.start };
+  };
+  const options = cleanNotesOptions({ foot: read("w:footnotePr", DEFAULT_NOTES.foot), end: read("w:endnotePr", DEFAULT_NOTES.end) });
+  return JSON.stringify(options) === JSON.stringify(DEFAULT_NOTES) ? null : options;
 }
 
 const on = (el: Element | null): boolean => {
@@ -457,16 +490,19 @@ interface FieldState {
   seq?: { label: string; result: string };
   /** The citation field being read. */
   cite?: { tag: string; page: string };
+  /** The fields this one is nested in (their state while the inner one is read). */
+  stack?: Array<{ state: "instr" | "result" | null; instr: string; skip: boolean; seq?: { label: string; result: string }; cite?: { tag: string; page: string } }>;
 }
 
 /** `SEQ Figure \* ARABIC` : the label of a numbering field. */
 /** `CITATION Dupont2020 \l 1036 \p 12` : the tag of a citation field and its page. */
 function citationField(instr: string): { tag: string; page: string } | null {
   const m = /^\s*CITATION\s+("?)([^"\s\\]+)\1/i.exec(instr);
-  return m ? { tag: m[2], page: /\\p\s+([^\s\\]+)/i.exec(instr)?.[1] ?? "" } : null;
+  const tag = m ? m[2].replace(/[^\p{L}\p{N}_.:-]/gu, "").slice(0, 60) : "";
+  return m && tag ? { tag, page: (/\\p\s+([^\s\\]+)/i.exec(instr)?.[1] ?? "").slice(0, 40) } : null;
 }
 
-const seqLabel = (instr: string): string | null => /^\s*SEQ\s+("?)([^"\s\\]+)\1/i.exec(instr)?.[2] ?? null;
+const seqLabel = (instr: string): string | null => { const l = /^\s*SEQ\s+("?)([^"\s\\]+)\1/i.exec(instr)?.[2]; return l ? cleanLabel(l) : null; };
 
 const pageFieldKind = (instr: string): "page" | "pages" | null => (/NUMPAGES/i.test(instr) ? "pages" : /\bPAGE\b/i.test(instr) ? "page" : null);
 
@@ -482,7 +518,10 @@ function convertRuns(ctx: Ctx, parent: Element, base: RunProps, out: PM[], fs: F
           switch (c.nodeName) {
             case "w:fldChar": {
               const t = c.getAttribute("w:fldCharType");
-              if (t === "begin") { fs.state = "instr"; fs.instr = ""; fs.skip = false; fs.seq = undefined; fs.cite = undefined; }
+              if (t === "begin") {
+                if (fs.state) (fs.stack ??= []).push({ state: fs.state, instr: fs.instr, skip: fs.skip, seq: fs.seq, cite: fs.cite });
+                fs.state = "instr"; fs.instr = ""; fs.skip = false; fs.seq = undefined; fs.cite = undefined;
+              }
               else if (t === "separate") {
                 const kind = ctx.fields ? pageFieldKind(fs.instr) : null;
                 const label = seqLabel(fs.instr);
@@ -493,15 +532,20 @@ function convertRuns(ctx: Ctx, parent: Element, base: RunProps, out: PM[], fs: F
               } else if (t === "end") {
                 if (fs.seq) out.push({ type: "seqField", attrs: { label: fs.seq.label, n: Math.max(1, parseInt(fs.seq.result, 10) || 1) } });
                 if (fs.cite) out.push({ type: "citation", attrs: { tag: fs.cite.tag, page: fs.cite.page, text: "" } });
-                fs.state = null; fs.skip = false; fs.seq = undefined; fs.cite = undefined;
+                const outer = fs.stack?.pop();
+                if (outer) { fs.state = outer.state; fs.instr = outer.instr; fs.skip = outer.skip; fs.seq = outer.seq; fs.cite = outer.cite; }
+                else { fs.state = null; fs.skip = false; fs.seq = undefined; fs.cite = undefined; }
               }
               break;
             }
             case "w:instrText": if (fs.state === "instr") fs.instr += c.textContent ?? ""; break;
-            case "w:t":
+            case "w:t": {
+              // the result of a field replaced by a node is not text (an inner field is part of it)
+              const hidden = (fs.skip && fs.state === "result") || !!fs.stack?.some((f) => f.skip && f.state === "result");
               if (fs.skip && fs.state === "result" && fs.seq) fs.seq.result += c.textContent ?? "";
-              else if (c.textContent && !(fs.skip && fs.state === "result") && fs.state !== "instr") out.push(textNode(c.textContent, merged));
+              else if (c.textContent && !hidden && fs.state !== "instr") out.push(textNode(c.textContent, merged));
               break;
+            }
             case "w:tab": out.push(textNode("\t", merged)); break;
             case "w:noBreakHyphen": out.push(textNode("-", merged)); break;
             case "w:br":
@@ -522,8 +566,8 @@ function convertRuns(ctx: Ctx, parent: Element, base: RunProps, out: PM[], fs: F
             case "w:pict": ctx.warnings.add("Formes, zones de texte ou objets incorporés : ignorés."); break;
             case "w:footnoteReference": case "w:endnoteReference": {
               const kind = c.nodeName === "w:endnoteReference" ? "end" : "foot";
-              const text = ctx.notes?.[kind].get(c.getAttribute("w:id") ?? "");
-              if (text !== undefined) out.push({ type: "footnote", attrs: { kind, text: text.slice(0, 2000), n: 1 } });
+              const el = ctx.notes?.[kind].get(c.getAttribute("w:id") ?? "");
+              if (el) { const body = noteBodyFrom(ctx, el); out.push({ type: "footnote", attrs: { kind, text: bodyText(body), body, n: 1, label: "" } }); }
               else ctx.warnings.add("Notes de bas de page ou de fin introuvables dans le fichier : ignorées.");
               break;
             }
@@ -539,7 +583,7 @@ function convertRuns(ctx: Ctx, parent: Element, base: RunProps, out: PM[], fs: F
         convertRuns(ctx, node, href ? { ...base, link: href } : base, out, fs);
         break;
       }
-      case "w:bookmarkStart": { const name = node.getAttribute("w:name"); if (name && name !== "_GoBack") out.push({ type: "bookmark", attrs: { name } }); break; }
+      case "w:bookmarkStart": { const name = node.getAttribute("w:name"); if (name && name !== "_GoBack" && !/^_Toc/.test(name)) out.push({ type: "bookmark", attrs: { name } }); break; }
       case "w:fldSimple": {
         const instr = node.getAttribute("w:instr") ?? "";
         const kind = ctx.fields ? pageFieldKind(instr) : null;
@@ -921,6 +965,7 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(bytes);
+    assertSafeZip(zip);
   } catch {
     throw corrupt("archive ZIP illisible");
   }
@@ -959,6 +1004,7 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   if (!body) throw corrupt("corps du document absent");
   // Sections: every `w:sectPr` (those of the paragraphs that end a section, then the body's own) is one section.
   const settings = await text("word/settings.xml");
+  const noteOptions = readNoteOptions(settings);
   const mirrored = !!settings && /<w:mirrorMargins\b(?![^>]*w:val="(?:0|false|off)")/.test(settings);
   const gutterTop = !!settings && /<w:gutterAtTop\b(?![^>]*w:val="(?:0|false|off)")/.test(settings);
   const sectPrs = Array.from(doc.getElementsByTagName("w:sectPr"));
@@ -1019,7 +1065,6 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   resolvePlacements(seg, infos[Math.min(si, infos.length - 1)].w, infos[Math.min(si, infos.length - 1)].margins);
 
   const headerFooter = resolved[0] && (resolved[0].header.default || resolved[0].header.first || resolved[0].header.even || resolved[0].footer.default || resolved[0].footer.first || resolved[0].footer.even) ? resolved[0] : undefined;
-  if ([...(ctx.notes?.foot.values() ?? []), ...(ctx.notes?.end.values() ?? [])].some((t) => t.length > 2000)) warnings.add("Notes : les textes de plus de 2000 caractères sont raccourcis.");
   if (zip.file("word/comments.xml")) warnings.add("Commentaires : non pris en charge, ignorés.");
 
   // Never present an unreadable document as an empty one.
@@ -1029,5 +1074,5 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   }
   const styles = readDocStyles(ctx);
   const watermark = await readWatermark(zip);
-  return { model: { content: { type: "doc", content: tocResolved(ensureBlocks(blocks)), ...(bib ? { attrs: { sources: bib.sources, ...(bib.style ? { citationStyle: bib.style } : {}) } } : {}) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(styles).length ? { styles } : {}), ...(watermark ? { watermark } : {}) }, warnings: [...warnings] };
+  return { model: { content: { type: "doc", content: tocResolved(ensureBlocks(blocks)), ...(bib || noteOptions ? { attrs: { ...(bib ? { sources: bib.sources, ...(bib.style ? { citationStyle: bib.style } : {}) } : {}), ...(noteOptions ? { notes: noteOptions } : {}) } } : {}) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(styles).length ? { styles } : {}), ...(watermark ? { watermark } : {}) }, warnings: [...warnings] };
 }

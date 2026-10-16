@@ -10,7 +10,7 @@ import { Button, Dialog } from "../ui/Dialog";
 const field = "h-8 w-full rounded-md border border-line bg-surface px-2 text-[13px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/20";
 const lbl = "block text-[11px] font-medium uppercase tracking-wide text-muted";
 
-const blank = (): Source => ({ tag: "", type: "book", authors: [], title: "", year: "", publisher: "", city: "", volume: "", pages: "", url: "" });
+const blank = (): Source => ({ tag: "", type: "book", authors: [], title: "", year: "", publisher: "", city: "", volume: "", issue: "", pages: "", url: "" });
 const authorsToText = (a: Person[]) => a.map((p) => (p.first ? `${p.last}, ${p.first}` : p.last)).join("\n");
 const textToAuthors = (t: string): Person[] => t.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const [last, ...rest] = l.split(","); return { last: last.trim(), first: rest.join(",").trim() }; });
 const label = (s: Source) => `${s.authors[0]?.last ?? "(sans auteur)"}${s.year ? `, ${s.year}` : ""} — ${s.title || "(sans titre)"}`;
@@ -87,7 +87,8 @@ export function SourcesDialog() {
           <div className="grid grid-cols-2 gap-3">
             {text("publisher", draft.type === "article" ? "Revue" : draft.type === "web" ? "Site" : "Éditeur")}
             {text("city", "Lieu d'édition")}
-            {text("volume", "Volume / numéro")}
+            {text("volume", "Volume")}
+            {text("issue", "Numéro")}
             {text("pages", "Pages")}
           </div>
           {text("url", "Adresse web (https://…)")}

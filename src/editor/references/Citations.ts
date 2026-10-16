@@ -40,9 +40,9 @@ export const Citation = Node.create({
   atom: true,
   addAttributes() {
     return {
-      tag: { default: "", parseHTML: (el: HTMLElement) => el.getAttribute("data-tag") ?? "" },
+      tag: { default: "", parseHTML: (el: HTMLElement) => (el.getAttribute("data-tag") ?? "").replace(/[^\p{L}\p{N}_.:-]/gu, "").slice(0, 60) },
       page: { default: "", parseHTML: (el: HTMLElement) => (el.getAttribute("data-page") ?? "").slice(0, 40) },
-      text: { default: "", parseHTML: (el: HTMLElement) => el.textContent ?? "" },
+      text: { default: "", parseHTML: (el: HTMLElement) => (el.textContent ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").slice(0, 120) },
     };
   },
   parseHTML: () => [{ tag: "span.citation" }],

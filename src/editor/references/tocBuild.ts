@@ -17,7 +17,7 @@ export function collectHeadings(doc: PMNode): HeadingInfo[] {
   const out: HeadingInfo[] = [];
   doc.descendants((node, pos) => {
     if (node.type.name === "heading") out.push({ index: out.length, level: Math.min(MAX_TOC_LEVEL, Math.max(1, +node.attrs.level || 1)), text: node.textContent.trim(), pos });
-    return node.type.name !== "tableOfContents"; // the entries of a table are not headings
+    return node.type.name !== "tableOfContents" && node.type.name !== "shape" && node.type.name !== "shapeGroup"; // neither the entries of a table nor the text of a shape are headings
   });
   return out;
 }

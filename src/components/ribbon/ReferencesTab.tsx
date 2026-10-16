@@ -1,4 +1,4 @@
-import { BookMarked, BookText, LibraryBig, ListTree, ListOrdered, Palette, Quote, Tags, TextQuote } from "lucide-react";
+import { BookMarked, BookText, LibraryBig, ListTree, ListOrdered, Palette, Quote, Settings2, Tags, TextQuote } from "lucide-react";
 import { sourcesOf, styleOf } from "../../editor/references/Citations";
 import { CITATION_STYLES } from "../../editor/references/sources";
 import { collectCaptions } from "../../editor/references/Captions";
@@ -16,8 +16,8 @@ export function ReferencesTab() {
   const labels = useEditorState({ editor, selector: ({ editor: e }) => (e ? [...new Set(collectCaptions(e.state.doc).map((c) => c.label))].join("|") : "") }) ?? "";
   const labelList = labels ? labels.split("|") : [];
   // The sources and the style of the citations (they live in the document).
-  const refs = useEditorState({ editor, selector: ({ editor: e }) => (e ? JSON.stringify({ s: sourcesOf(e.state.doc).map((x) => [x.tag, x.authors[0]?.last ?? "", x.year, x.title]), st: styleOf(e.state.doc), b: (() => { let f = false; e.state.doc.descendants((n) => { if (n.type.name === "bibliography") f = true; return !f; }); return f; })() }) : "{}") }) ?? "{}";
-  const { s: sourceList = [], st: citationStyle = "apa", b: hasBibliography = false } = JSON.parse(refs) as { s?: Array<[string, string, string, string]>; st?: string; b?: boolean };
+  const refs = useEditorState({ editor, selector: ({ editor: e }) => (e ? JSON.stringify({ s: sourcesOf(e.state.doc).map((x) => [x.tag, x.authors[0]?.last ?? "", x.year, x.title]), st: styleOf(e.state.doc), b: (() => { let f = false; e.state.doc.descendants((n) => { if (n.type.name === "bibliography") f = true; return !f; }); return f; })(), t: (() => { let f = false; e.state.doc.descendants((n) => { if (n.type.name === "tableOfContents") f = true; return !f; }); return f; })() }) : "{}") }) ?? "{}";
+  const { s: sourceList = [], st: citationStyle = "apa", b: hasBibliography = false, t: hasToc = false } = JSON.parse(refs) as { s?: Array<[string, string, string, string]>; st?: string; b?: boolean; t?: boolean };
   const insertToc = (levels: number) => editor?.chain().focus().insertTableOfContents({ levels }).run();
   return (
     <>
@@ -31,14 +31,15 @@ export function ReferencesTab() {
             { label: "Table automatique : 2 niveaux", title: "Titres 1 et 2, avec leur page", onSelect: () => insertToc(2) },
             { label: "Table automatique : 1 niveau", title: "Titres 1 uniquement, avec leur page", onSelect: () => insertToc(1) },
             { separator: true as const },
-            { label: "Supprimer la table des matières", onSelect: () => editor?.chain().focus().removeTableOfContents().run() },
+            { label: "Supprimer la table des matières", disabled: !hasToc, onSelect: () => editor?.chain().focus().removeTableOfContents().run() },
           ]}
         />
-        <RibbonButton icon={BookText} size="lg" label="Mettre à jour" title="Met à jour les tables des matières (titres et pages)" onClick={() => editor?.chain().focus().updateTableOfContents().run()} />
+        <RibbonButton icon={BookText} size="lg" label="Mettre à jour" title={hasToc ? "Met à jour les tables des matières (titres et pages)" : "Insérez d'abord une table des matières"} disabled={!hasToc} onClick={() => editor?.chain().focus().updateTableOfContents().run()} />
       </RibbonGroup>
       <RibbonGroup label="Notes">
         <RibbonButton icon={TextQuote} size="lg" label="Note de bas de page" title="Insère une note en bas de la page (Ctrl+Alt+F)" onClick={() => set({ notePos: null, noteKind: "foot", dialog: "note" })} />
         <RibbonButton icon={BookMarked} size="lg" label="Note de fin" title="Insère une note réunie à la fin du document (Ctrl+Alt+D)" onClick={() => set({ notePos: null, noteKind: "end", dialog: "note" })} />
+        <RibbonButton icon={Settings2} label="Options des notes…" title="Format, premier numéro et redémarrage de la numérotation des notes" onClick={() => set({ dialog: "notesOptions" })} />
       </RibbonGroup>
       <RibbonGroup label="Citations et bibliographie">
         <DropdownButton

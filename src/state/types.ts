@@ -69,7 +69,7 @@ export interface DocumentMeta {
   lossy: string[];
 }
 
-export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "paragraph" | "watermark" | "pageNumber" | "columns" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | "caption" | "note" | "sources" | null;
+export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "paragraph" | "watermark" | "pageNumber" | "columns" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | "caption" | "note" | "notesOptions" | "sources" | null;
 
 export interface AppState {
   theme: ThemeMode;

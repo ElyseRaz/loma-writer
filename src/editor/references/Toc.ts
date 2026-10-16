@@ -1,6 +1,6 @@
 import { Extension, mergeAttributes, Node } from "@tiptap/core";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
-import { collectCaptions } from "./Captions";
+import { cleanLabel, collectCaptions } from "./Captions";
 import { captionLines, collectHeadings, DEFAULT_TOC_TITLE, entryNodes, headingLines, MAX_TOC_LEVEL } from "./tocBuild";
 
 declare module "@tiptap/core" {
@@ -53,10 +53,10 @@ export const TableOfContents = Node.create({
   addAttributes() {
     return {
       levels: { default: MAX_TOC_LEVEL, parseHTML: (el: HTMLElement) => clampLevels(el.getAttribute("data-levels")) },
-      kind: { default: "headings", parseHTML: (el: HTMLElement) => el.getAttribute("data-kind") ?? "headings" },
+      kind: { default: "headings", parseHTML: (el: HTMLElement) => (el.getAttribute("data-kind") === "captions" ? "captions" : "headings") },
       title: { default: DEFAULT_TOC_TITLE, parseHTML: (el: HTMLElement) => (el.getAttribute("data-title") ?? DEFAULT_TOC_TITLE).slice(0, 120) },
       /** Captions only: the label of the list ("Figure", "Tableau"…). */
-      label: { default: null, parseHTML: (el: HTMLElement) => el.getAttribute("data-label") },
+      label: { default: null, parseHTML: (el: HTMLElement) => cleanLabel(el.getAttribute("data-label")) },
     };
   },
   parseHTML: () => [{ tag: "div.toc" }],
