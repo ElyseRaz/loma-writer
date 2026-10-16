@@ -80,6 +80,79 @@ describe.skipIf(!hasLibreOffice)("interoperability with LibreOffice (independent
     });
   });
 
+  describe("table of contents", () => {
+    const T = (text: string) => ({ type: "text", text });
+    const withToc = () => ({
+      content: { type: "doc", content: [
+        { type: "tableOfContents", attrs: { levels: 2, kind: "headings", title: "Sommaire", label: null }, content: [
+          { type: "tocEntry", attrs: { level: 1, target: 0, page: "1" }, content: [T("Introduction")] },
+          { type: "tocEntry", attrs: { level: 2, target: 1, page: "2" }, content: [T("Contexte")] } ] },
+        { type: "heading", attrs: { level: 1 }, content: [T("Introduction")] }, { type: "paragraph", content: [T("a")] },
+        { type: "heading", attrs: { level: 2 }, content: [T("Contexte")] }, { type: "paragraph", content: [T("b")] } ] },
+      page: { size: "A4", orientation: "portrait", margins: "normal" },
+    }) as never;
+    const lines = (m: { content: { content?: Array<{ type?: string; content?: Array<{ attrs?: { level: number; page: string }; content?: Array<{ text: string }> }> }> } }) =>
+      (m.content.content ?? []).find((n) => n.type === "tableOfContents")?.content?.map((e) => `${e.attrs?.level}:${e.content?.[0]?.text}:${e.attrs?.page}`);
+    it("our DOCX -> LibreOffice -> ODT -> our importer keeps the table of contents", async () => {
+      const { model } = await importOdt(libreOffice((await exportDocx(withToc())).bytes, "docx", "odt"));
+      expect(lines(model as never)).toEqual(["1:Introduction:1", "2:Contexte:2"]);
+    });
+    it("our ODT -> LibreOffice -> DOCX -> our importer keeps the table of contents", async () => {
+      const { model } = await importDocx(libreOffice((await exportOdt(withToc())).bytes, "odt", "docx"));
+      expect(lines(model as never)).toEqual(["1:Introduction:1", "2:Contexte:2"]);
+    });
+  });
+
+  describe("captions", () => {
+    const T = (text: string) => ({ type: "text", text });
+    const cap = (label: string, n: number, text: string) => ({ type: "paragraph", attrs: { caption: label }, content: [T(`${label} `), { type: "seqField", attrs: { label, n } }, T(` : ${text}`)] });
+    const model = () => ({ content: { type: "doc", content: [{ type: "paragraph", content: [T("a")] }, cap("Figure", 1, "Un"), cap("Tableau", 1, "Deux"), cap("Figure", 2, "Trois")] }, page: { size: "A4", orientation: "portrait", margins: "normal" } }) as never;
+    const caps = (m: { content: { content?: Array<{ type?: string; attrs?: Record<string, unknown>; content?: Array<{ type: string; text?: string; attrs?: { n: number } }> }> } }) =>
+      (m.content.content ?? []).filter((n) => typeof n.attrs?.caption === "string").map((n) => `${n.attrs!.caption === "Table" ? "Tableau" : n.attrs!.caption /* LibreOffice calls this sequence "Table" */}:${(n.content ?? []).map((c) => (c.type === "seqField" ? c.attrs!.n : c.text)).join("")}`);
+    const want = ["Figure:Figure 1 : Un", "Tableau:Tableau 1 : Deux", "Figure:Figure 2 : Trois"];
+    it("our DOCX -> LibreOffice -> ODT -> our importer keeps the captions and their numbering", async () => {
+      expect(caps((await importOdt(libreOffice((await exportDocx(model())).bytes, "docx", "odt"))).model as never)).toEqual(want);
+    });
+    it("our ODT -> LibreOffice -> DOCX -> our importer keeps the captions and their numbering", async () => {
+      expect(caps((await importDocx(libreOffice((await exportOdt(model())).bytes, "odt", "docx"))).model as never)).toEqual(want);
+    });
+  });
+
+  describe("notes", () => {
+    const T = (text: string) => ({ type: "text", text });
+    const fn = (kind: string, text: string) => ({ type: "footnote", attrs: { kind, n: 1, text } });
+    const model = () => ({ content: { type: "doc", content: [{ type: "paragraph", content: [T("Un"), fn("foot", "Bas de page."), T(" et "), fn("end", "Fin de document.")] }] }, page: { size: "A4", orientation: "portrait", margins: "normal" } }) as never;
+    const notes = (m: { content: { content?: Array<{ content?: Array<{ type: string; attrs?: { kind: string; text: string } }> }> } }) =>
+      (m.content.content ?? []).flatMap((p) => (p.content ?? []).filter((c) => c.type === "footnote").map((c) => `${c.attrs!.kind}:${c.attrs!.text}`));
+    const want = ["foot:Bas de page.", "end:Fin de document."];
+    it("our DOCX -> LibreOffice -> ODT -> our importer keeps both kinds of notes", async () => {
+      expect(notes((await importOdt(libreOffice((await exportDocx(model())).bytes, "docx", "odt"))).model as never)).toEqual(want);
+    });
+    it("our ODT -> LibreOffice -> DOCX -> our importer keeps both kinds of notes", async () => {
+      expect(notes((await importDocx(libreOffice((await exportOdt(model())).bytes, "odt", "docx"))).model as never)).toEqual(want);
+    });
+  });
+
+  describe("citations", () => {
+    const T = (text: string) => ({ type: "text", text });
+    const sources = [{ tag: "Dupont2020", type: "book", authors: [{ last: "Dupont", first: "Jean" }], title: "Les chats", year: "2020", publisher: "Seuil", city: "Paris", volume: "", pages: "", url: "" }];
+    const model = () => ({ content: { type: "doc", attrs: { sources, citationStyle: "apa" }, content: [
+      { type: "paragraph", content: [T("Voir "), { type: "citation", attrs: { tag: "Dupont2020", page: "", text: "(Dupont, 2020)" } }, T(".")] },
+      { type: "bibliography", attrs: { title: "Bibliographie", mode: "cited" }, content: [{ type: "bibEntry", content: [T("Dupont, J. (2020). Les chats. Paris : Seuil.")] }] } ] }, page: { size: "A4", orientation: "portrait", margins: "normal" } }) as never;
+    const tags = (m: { content: { content?: Array<{ type?: string; content?: Array<{ type: string; attrs?: { tag: string } }> }> } }) =>
+      (m.content.content ?? []).flatMap((p) => (p.content ?? []).filter((c) => c.type === "citation").map((c) => c.attrs!.tag));
+    const bibs = (m: { content: { content?: Array<{ type?: string }> } }) => (m.content.content ?? []).filter((n) => n.type === "bibliography").length;
+    it("our DOCX -> LibreOffice -> ODT -> our importer keeps the citation and the bibliography", async () => {
+      const { model: m } = await importOdt(libreOffice((await exportDocx(model())).bytes, "docx", "odt"));
+      expect(tags(m as never)).toEqual(["Dupont2020"]);
+      expect(bibs(m as never)).toBe(1);
+    });
+    it("our ODT -> LibreOffice -> DOCX -> our importer keeps the citation", async () => {
+      const { model: m } = await importDocx(libreOffice((await exportOdt(model())).bytes, "odt", "docx"));
+      expect(tags(m as never)).toEqual(["Dupont2020"]);
+    });
+  });
+
   it("our ODT -> LibreOffice -> DOCX -> our importer keeps the document skeleton", async () => {
     const model = richModel();
     const docx = libreOffice((await exportOdt(model)).bytes, "odt", "docx");
@@ -123,7 +196,7 @@ describe.skipIf(!hasLibreOffice)("interoperability with LibreOffice (independent
     expect(back.page).toEqual(model.page);
   });
 
-  it("imports a header and footer (with a page-number field) written by LibreOffice, and reports footnotes", async () => {
+  it("imports a header and footer (with a page-number field) written by LibreOffice, and reads its footnotes", async () => {
     const odt = (await exportOdt(richModel())).bytes;
     const JSZip = (await import("jszip")).default;
     const zip = await JSZip.loadAsync(odt);
@@ -134,7 +207,8 @@ describe.skipIf(!hasLibreOffice)("interoperability with LibreOffice (independent
     const withExtras = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
     const { warnings, model } = await importDocx(libreOffice(withExtras, "odt", "docx"));
     const all = warnings.join("\n");
-    expect(all).toMatch(/Notes de bas de page/);
+    expect(all).not.toMatch(/Notes de bas de page/);
+    expect(JSON.stringify(model.content)).toContain('"text":"La note"');
     expect(templateOf(model.headerFooter?.header.default?.blocks)).toBe("Mon en-tête");
     expect(templateOf(model.headerFooter?.footer.default?.blocks)).toBe("Page {PAGE}");
     expect(plainText(model.content)).toContain("Avec note");

@@ -34,6 +34,14 @@ SCENARIOS = [
     ('one column: a table of 1500 rows (about 40 pages: no drift, no slowdown)', f'<table><tbody>{rows(1500)}</tbody></table><p>FINDOC {LOREM}</p>', False, ['a0', 'a1499', 'FINDOC'], 30),
 ]
 
+REFS = (
+    '<div class="toc" data-toc="" data-levels="2" data-kind="headings" data-title="SOMMAIRE"><div class="toc-entry" data-level="1" data-page="1" data-target="0">Chapitre un</div><div class="toc-entry" data-level="1" data-page="2" data-target="1">Chapitre deux</div></div>'
+    + f'<h1>Chapitre un</h1><p>Texte un <span data-note="foot" data-text="NOTEBAS un" data-n="1">1</span> {LOREM * 30}</p>'
+    + f'<p data-caption="Figure">Figure <span data-seq="Figure">1</span> : LEGENDE un</p>'
+    + f'<h1>Chapitre deux</h1><p>Texte deux <span data-note="end" data-text="NOTEFIN un" data-n="1">i</span> <span data-note="foot" data-text="NOTEBAS deux" data-n="2">2</span> {LOREM * 30}</p>'
+)
+SCENARIOS.append(('one column: table of contents, caption, footnotes and endnotes', REFS, False, ['SOMMAIRE', 'Chapitre deux', 'NOTEBAS un', 'LEGENDE un', 'NOTEBAS deux', 'NOTEFIN un'], 1))
+
 TEST = r"""
 window.__run = async (html, cols) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -135,7 +143,7 @@ def run_scenario(i):
             order = [next((n for n, t in enumerate(page_texts) if m in t), -1) for m in markers]
             for m, at in zip(markers, order): ok(at >= 0, f'"{m}" is in the printed text (page {at + 1})')
             ok(order == sorted(order), f'the markers come out in document order (pages {[a + 1 for a in order]})')
-            ok(all(sum(m in t for t in page_texts) <= 1 or m in ('court', 'ENTETE1', 'START') for m in markers), 'no marker is printed twice')
+            ok(all(sum(m in t for t in page_texts) <= 1 or m in ('court', 'ENTETE1', 'START', 'Chapitre deux') for m in markers), 'no marker is printed twice')
             run_scenario(i + 1)
         op.connect('finished', after)
         op.connect('failed', lambda o, e: (ok(False, f'print failed: {e.message}'), run_scenario(i + 1)))

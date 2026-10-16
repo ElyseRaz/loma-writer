@@ -62,7 +62,7 @@ describe("ODT", () => {
     expect(back.content.content![0].content![0].text).toBe("a   b\tc");
   });
 
-  it("reads a header, and reports footnotes it cannot keep", async () => {
+  it("reads a header, and keeps its footnotes", async () => {
     const { bytes } = await exportOdt(richModel());
     const zip = await JSZip.loadAsync(bytes);
     const content = await zip.file("content.xml")!.async("string");
@@ -71,7 +71,8 @@ describe("ODT", () => {
     zip.file("styles.xml", styles.replace('<style:master-page style:name="Standard" style:page-layout-name="pm1"></style:master-page>', '<style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>En-tête</text:p></style:header></style:master-page>'));
     const { warnings, model } = await importOdt(await zip.generateAsync({ type: "uint8array" }));
     const all = warnings.join("\n");
-    expect(all).toMatch(/Notes de bas de page/);
+    expect(all).not.toMatch(/Notes de bas de page/);
+    expect(JSON.stringify(model.content)).toContain('"kind":"foot"');
     expect(templateOf(model.headerFooter?.header.default?.blocks)).toBe("En-tête");
   });
 

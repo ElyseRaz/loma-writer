@@ -10,13 +10,16 @@ import { ALL_BULLET_IDS, ALL_NUMBER_IDS, BULLET_CHARS, levelType } from "./listF
 import { cleanListType } from "../../editor/ListTypes";
 import {
   AlignmentType, NumberFormat, HeightRule, SectionType, HorizontalPositionRelativeFrom, TextWrappingSide, TextWrappingType, VerticalPositionRelativeFrom, Bookmark, BorderStyle, Document, ExternalHyperlink, Footer, Header, InternalHyperlink, PageNumber, HeadingLevel, ImageRun, LevelFormat, Packer, PageOrientation, Paragraph,
-  PageBreak as DocxPageBreak, ColumnBreak as DocxColumnBreak, ShadingType, Table, TableCell, TableRow, TextRun, WidthType, type ParagraphChild,
+  PageBreak as DocxPageBreak, ColumnBreak as DocxColumnBreak, SimpleField, FootnoteReferenceRun, ShadingType, Table, TableCell, TableRow, TextRun, WidthType, type ParagraphChild,
 } from "docx";
-import { pageDimensions, type PageSetup } from "../../state/types";
+import { marginsPx, pageDimensions, type PageSetup } from "../../state/types";
 import { baseMarginsCm, cmToPx, gutterOf, isMirrored } from "../../state/page";
 import { imageSize, parseDataUri } from "./xml";
 import type { PM, Mark } from "./pm";
-import { RawXml } from "./docxPost";
+import { addEndnotes, RawXml } from "./docxPost";
+import { tocBookmark, tocXml } from "./docxToc";
+import { addSourcesPart, bibliographyXml } from "./docxBib";
+import { cleanSources, isCitationStyle, type CitationStyle, type Source } from "../../editor/references/sources";
 import { groupRunXml, shapeRunXml } from "./docxShapes";
 import { latexToMathml, parseMathml } from "../math/mathml";
 import { mathmlElementToOmml } from "../math/omml";
@@ -41,6 +44,18 @@ interface Ctx {
   raw: RawXml;
   shapeId: number;
   orderedInstances: number;
+  /** The sources and the style of the citations. */
+  sources: Source[];
+  citationStyle: CitationStyle;
+  /** Footnotes (the docx library writes them) and endnote texts (written by `addEndnotes`). */
+  footnotes: Record<number, { children: Paragraph[] }>;
+  endnotes: string[];
+  /** The document has a table of contents: headings get the bookmark its entries link to. */
+  hasToc: boolean;
+  /** Rank of the next heading. */
+  headings: number;
+  /** Position of the right tab of the table of contents lines (twips). */
+  tocTab: number;
   defaults: { fontFamily: string; fontSizePt: number };
 }
 
@@ -81,6 +96,26 @@ function inline(ctx: Ctx, nodes: PM[] = []): ParagraphChild[] {
   for (const n of nodes) {
     if (n.type === "hardBreak") out.push(new TextRun({ break: 1 }));
     else if (n.type === "pageField") out.push(new TextRun({ children: [n.attrs?.kind === "pages" ? PageNumber.TOTAL_PAGES : PageNumber.CURRENT] }));
+    else if (n.type === "seqField") out.push(new SimpleField(`SEQ ${String(n.attrs?.label ?? "Figure")} \\* ARABIC`, String(n.attrs?.n ?? 1)))
+    else if (n.type === "citation") {
+      const tag = String(n.attrs?.tag ?? "").replace(/[^\p{L}\p{N}_.:-]/gu, "");
+      const page = String(n.attrs?.page ?? "").replace(/[^\p{L}\p{N}.,-]/gu, "");
+      const instr = `CITATION ${tag} \\l 1036${page ? ` \\p ${page}` : ""}`;
+      const t = String(n.attrs?.text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      // a complex field, as Word writes it
+      out.push(new TextRun({ text: ctx.raw.add("CITE", `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ${instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t xml:space="preserve">${t}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`) }));
+    }
+    else if (n.type === "footnote") {
+      const text = String(n.attrs?.text ?? "");
+      if (n.attrs?.kind === "end") {
+        ctx.endnotes.push(text);
+        out.push(new TextRun({ text: ctx.raw.add("ENDREF", `<w:r><w:rPr><w:rStyle w:val="EndnoteReference"/></w:rPr><w:endnoteReference w:id="${ctx.endnotes.length}"/></w:r>`) }));
+      } else {
+        const id = Object.keys(ctx.footnotes).length + 1;
+        ctx.footnotes[id] = { children: [new Paragraph({ children: [new TextRun(text)] })] };
+        out.push(new FootnoteReferenceRun(id));
+      }
+    }
     else if (n.type === "bookmark") out.push(new Bookmark({ id: String(n.attrs?.name ?? "signet"), children: [] }));
     else if (n.type === "equation") {
       // A native Word equation (OMML), built from the KaTeX MathML of the formula.
@@ -138,7 +173,7 @@ function paragraphFor(ctx: Ctx, n: PM, extra: Record<string, unknown> = {}, list
   const side = { style: BorderStyle.SINGLE, size: 6, color: "6B7280", space: 4 };
   const border = b ? { ...(b.top ? { top: side } : {}), ...(b.right ? { right: side } : {}), ...(b.bottom ? { bottom: side } : {}), ...(b.left ? { left: side } : {}) } : undefined;
   return new Paragraph({
-    children: [...lead, ...inline(ctx, n.content)],
+    children: [...lead, ...(n.type === "heading" && ctx.hasToc ? [new Bookmark({ id: tocBookmark(ctx.headings++), children: inline(ctx, n.content) as never })] : inline(ctx, n.content))],
     ...(n.attrs?.textAlign && n.attrs.textAlign !== "left" ? { alignment: ALIGN[String(n.attrs.textAlign)] } : {}),
     ...(shading ? { shading } : {}),
     ...(border && Object.keys(border).length ? { border } : {}),
@@ -165,7 +200,10 @@ function blocks(ctx: Ctx, nodes: PM[] = [], list: ListCtx = null): Block[] {
   for (const n of nodes) {
     if (n.type !== "paragraph" && n.type !== "heading" && n.type !== "shape" && n.type !== "shapeGroup") flushAnchored();
     switch (n.type) {
-      case "paragraph": case "heading": out.push(paragraphFor(ctx, n, {}, null, takeAnchored())); break;
+      case "paragraph": case "heading": out.push(paragraphFor(ctx, n, typeof n.attrs?.caption === "string" ? { style: "Caption" } : {}, null, takeAnchored())); break;
+      case "bibliography": out.push(new Paragraph({ children: [new TextRun({ text: ctx.raw.addBlock("BIB", bibliographyXml(n)) })] })); break;
+      case "endnotes": break; // generated from the references: Word builds its own endnotes
+      case "tableOfContents": out.push(new Paragraph({ children: [new TextRun({ text: ctx.raw.addBlock("TOC", tocXml(n, ctx.tocTab)) })] })); break;
       case "blockquote":
         for (const c of n.content ?? []) {
           if (c.type === "paragraph") out.push(paragraphFor(ctx, c, { style: "Quote" }));
@@ -329,9 +367,10 @@ async function addMirrorMargins(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
-  const ctx: Ctx = { warnings: new Set(), raw: new RawXml(), shapeId: 1000, orderedInstances: 0, defaults: model.defaults ?? { fontFamily: "Calibri", fontSizePt: 11 } };
+  const ctx: Ctx = { warnings: new Set(), raw: new RawXml(), shapeId: 1000, orderedInstances: 0, sources: cleanSources(model.content.attrs?.sources), citationStyle: isCitationStyle(model.content.attrs?.citationStyle) ? model.content.attrs.citationStyle : "apa", footnotes: {}, endnotes: [], hasToc: JSON.stringify(model.content).includes('"tableOfContents"'), headings: 0, tocTab: 9000, defaults: model.defaults ?? { fontFamily: "Calibri", fontSizePt: 11 } };
   const wm0 = cleanWatermark(model.watermark);
   const twips = (px: number) => Math.round(px * TWIPS_PER_PX);
+  ctx.tocTab = twips(pageDimensions(model.page).w - marginsPx(model.page).left - marginsPx(model.page).right);
   /** Paper, margins and orientation of a section (`w:pgSz`, `w:pgMar`). */
   const pageProps = (page: PageSetup) => {
     const { w, h } = pageDimensions({ ...page, orientation: "portrait" });
@@ -381,13 +420,23 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
         heading2: look("h2", !!model.styles?.h2?.fontFamily),
         heading3: look("h3", !!model.styles?.h3?.fontFamily),
       },
+      characterStyles: [{ id: "EndnoteReference", name: "endnote reference", run: { superScript: true } }],
       paragraphStyles: [
         { id: "Quote", name: "Quote", basedOn: "Normal", ...look("quote", !!model.styles?.quote?.fontFamily), paragraph: { ...look("quote").paragraph, indent: { left: 720 }, border: { left: { style: BorderStyle.SINGLE, size: 18, color: "2563EB", space: 10 } } } },
+        { id: "Caption", name: "caption", basedOn: "Normal", next: "Normal", run: { italics: true, size: 18, color: "44546A" }, paragraph: { spacing: { before: 60, after: 160 } } },
+        { id: "Bibliography", name: "Bibliography", basedOn: "Normal", next: "Normal", paragraph: { spacing: { after: 120 }, indent: { left: 480, hanging: 480 } } },
+        { id: "EndnoteText", name: "endnote text", basedOn: "Normal", run: { size: 20 }, paragraph: { spacing: { after: 40 } } },
+        { id: "TableofFigures", name: "table of figures", basedOn: "Normal", next: "Normal", paragraph: { spacing: { after: 60 } } },
+        { id: "TOCHeading", name: "TOC Heading", basedOn: "Normal", next: "Normal", run: { bold: true, size: 32, color: "1D4ED8" }, paragraph: { spacing: { before: 120, after: 160 } } },
+        { id: "TOC1", name: "toc 1", basedOn: "Normal", next: "Normal", run: { bold: true }, paragraph: { spacing: { after: 80 } } },
+        { id: "TOC2", name: "toc 2", basedOn: "Normal", next: "Normal", paragraph: { spacing: { after: 60 }, indent: { left: 240 } } },
+        { id: "TOC3", name: "toc 3", basedOn: "Normal", next: "Normal", paragraph: { spacing: { after: 60 }, indent: { left: 480 } } },
         { id: "CodeBlock", name: "Code", basedOn: "Normal", run: { ...look("code").run, font: st("code").fontFamily === "JetBrains Mono" ? "Courier New" : st("code").fontFamily }, paragraph: { ...look("code").paragraph, shading: { type: ShadingType.CLEAR, fill: "F3F4F6", color: "auto" } } },
       ],
     },
     ...(model.headerFooter?.evenOdd ? { evenAndOddHeaderAndFooters: true } : {}),
     numbering: { config: numberingConfig },
+    footnotes: ctx.footnotes,
     sections: segments.map((seg, si) => {
       const hf = seg.hf;
       const children = blocks(ctx, seg.nodes);
@@ -407,6 +456,8 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
     }),
   });
   let bytes = await ctx.raw.apply(new Uint8Array(await Packer.toArrayBuffer(doc)));
+  bytes = await addEndnotes(bytes, ctx.endnotes);
+  bytes = await addSourcesPart(bytes, ctx.sources, ctx.citationStyle);
   if (isMirrored(model.page)) bytes = await addMirrorMargins(bytes);
   const wm = cleanWatermark(model.watermark);
   if (wm) bytes = await addWatermark(bytes, wm);

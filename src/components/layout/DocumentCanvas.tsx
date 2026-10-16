@@ -10,10 +10,12 @@ import { hasContent, reserveFor } from "../../pagination/headerFooter";
 import { pageGeometry } from "../../pagination/model";
 import { requestPagination, setPaginationInputs } from "../../pagination/extension";
 import { installSectionPrint } from "../../services/printSections";
-import { usePageInfo, usePaginationBands, usePaginationSheets } from "../../pagination/usePagination";
+import { usePageInfo, usePageNotes, usePaginationBands, usePaginationSheets } from "../../pagination/usePagination";
 import type { Sheet } from "../../pagination/model";
 import { buildSections, readSectionBreaks, readSections, sectionIndexAt, type SectionInfo } from "../../editor/Sections";
 import { stylesCss } from "../../editor/docStyles";
+import { makePageLabeler } from "../../editor/references/pageLabels";
+import type { ReferencesStorage } from "../../editor/references/Toc";
 import { useApp } from "../../state/store";
 import { ContextMenu, type MenuEntry } from "../ui/Menu";
 import type { Anchor } from "../ui/Popover";
@@ -56,6 +58,7 @@ export function DocumentCanvas() {
   const { total } = usePageInfo(editor, geometry.pitch);
   const engineSheets = usePaginationSheets(editor);
   const bands = usePaginationBands(editor);
+  const pageNotes = usePageNotes(editor);
   // Sheets in stack coordinates. Before the first layout there is one geometry and `total` pages.
   const sheets: Sheet[] = useMemo(() => {
     if (engineSheets.length) return engineSheets;
@@ -74,6 +77,12 @@ export function DocumentCanvas() {
   useEffect(() => {
     if (!editor) return;
     (editor.storage as unknown as { sectionBreak: { current: () => SectionInfo[] } }).sectionBreak.current = () => readSections(editor.state.doc, state.page, state.headerFooter);
+  }, [editor, state.page, state.headerFooter]);
+
+  // Tables of contents read the page label of a position (numbering of the sections included) from the last layout.
+  useEffect(() => {
+    if (!editor) return;
+    (editor.storage as unknown as { references: ReferencesStorage }).references.labelAt = makePageLabeler(editor, () => readSections(editor.state.doc, state.page, state.headerFooter));
   }, [editor, state.page, state.headerFooter]);
 
   // The editor is hidden behind the backstage: measure again as soon as it is visible.
@@ -161,6 +170,17 @@ export function DocumentCanvas() {
     return () => window.removeEventListener("loma:edit-equation", edit);
   }, [set]);
 
+  // Double-click on the number of a note edits its text.
+  useEffect(() => {
+    const edit = (e: Event) => set({ notePos: (e as CustomEvent<{ pos: number }>).detail.pos, dialog: "note" });
+    const insert = (e: Event) => set({ notePos: null, noteKind: (e as CustomEvent<{ kind: "foot" | "end" }>).detail.kind, dialog: "note" });
+    const source = (e: Event) => set({ sourceEdit: (e as CustomEvent<{ tag: string }>).detail.tag || null, dialog: "sources" });
+    window.addEventListener("loma:edit-note", edit);
+    window.addEventListener("loma:insert-note", insert);
+    window.addEventListener("loma:edit-source", source);
+    return () => { window.removeEventListener("loma:edit-note", edit); window.removeEventListener("loma:insert-note", insert); window.removeEventListener("loma:edit-source", source); };
+  }, [set]);
+
   // Format painter: the next selection made with the mouse receives the captured formatting.
   const painter = state.painter;
   useEffect(() => {
@@ -220,7 +240,7 @@ export function DocumentCanvas() {
       <div className="flex w-max min-w-full justify-center px-8 py-6">
         <div className="page-wrap relative shrink-0" style={{ width: maxWidth * scale, height: Math.max(stackHeight, contentHeight) * scale }}>
         <div ref={stackRef} className="page-stack absolute left-0 top-0 origin-top-left" style={{ width: maxWidth, minHeight: stackHeight, transform: `scale(${scale})`, ["--doc-font" as string]: state.prefs.fontFamily, ["--doc-size" as string]: `${state.prefs.fontSizePt}pt` }} data-pages={sheets.length} data-pitch={geometry.pitch} data-inset-left={geometry.insetLeft} data-inset-top={geometry.insetTop} data-sheets={JSON.stringify(sheets.map((s, i) => [Math.round(sheetTops[i] * 100) / 100, s.left, s.width, s.height]))}>
-          <PageSheets bands={bands} bounds={state.textBounds} watermark={state.watermark} sheets={sheets} sections={sections} geometries={geometries} onHeights={(i, h) => setHfs((cur) => (cur[i] && cur[i].header === h.header && cur[i].footer === h.footer ? cur : Object.assign([...cur], { [i]: h })))} />
+          <PageSheets bands={bands} notes={pageNotes} bounds={state.textBounds} watermark={state.watermark} sheets={sheets} sections={sections} geometries={geometries} onHeights={(i, h) => setHfs((cur) => (cur[i] && cur[i].header === h.header && cur[i].footer === h.footer ? cur : Object.assign([...cur], { [i]: h })))} />
           <div
             className={`paper relative${state.marks ? " show-marks" : ""}${state.bookmarks ? "" : " hide-bookmarks"}${painter ? " painter-armed" : ""}`}
             onMouseUp={onMouseUp}

@@ -385,7 +385,7 @@ select {
 .paper .ProseMirror > * * { --sec-l: 0px; --sec-r: 0px; }
 .paper .ProseMirror > p, .paper .ProseMirror > h1, .paper .ProseMirror > h2, .paper .ProseMirror > h3, .paper .ProseMirror > ul, .paper .ProseMirror > ol,
 .paper .ProseMirror > blockquote, .paper .ProseMirror > pre, .paper .ProseMirror > hr, .paper .ProseMirror > .tableWrapper, .paper .ProseMirror > .shape-anchor,
-.paper .ProseMirror > .section-break, .paper .ProseMirror > .page-break { margin-left: var(--sec-l, 0px); margin-right: var(--sec-r, 0px); }
+.paper .ProseMirror > .section-break, .paper .ProseMirror > .page-break, .paper .ProseMirror > .toc, .paper .ProseMirror > .endnotes, .paper .ProseMirror > .bibliography { margin-left: var(--sec-l, 0px); margin-right: var(--sec-r, 0px); }
 .paper .ProseMirror > .tableWrapper[data-placed] { margin-left: calc(var(--sec-l, 0px) + var(--place-x, 0px)); }
 /* The mark of a section break in the text (not printed). */
 .paper .ProseMirror .section-break { display: flex; align-items: center; gap: 8px; margin-top: 0.8em; margin-bottom: 0.8em; color: #6b7280; font: 600 10px/1 var(--font-ui, system-ui); text-transform: uppercase; letter-spacing: 0.06em; user-select: none; cursor: default; }
@@ -448,3 +448,38 @@ select {
 .paper .ProseMirror:not(.pg-measuring) [data-col-box] { display: contents; }
 .paper .ProseMirror:not(.pg-measuring) [data-col-quote] { border-left: 3px solid #2563eb; padding: 0 1em; background: #f6f8fd; font-style: italic; color: #3f4a63; }
 .page-column-rule { position: absolute; width: 0; border-left: 1px solid #9ca3af; pointer-events: none; }
+
+/* Table of contents: the lines are real paragraphs of the document, drawn with a dotted leader and the page number at the right. */
+.paper .ProseMirror .toc { margin: 0.4em 0 1em; }
+.paper .ProseMirror .toc::before { content: attr(data-title); display: block; margin: 0 0 0.5em; font-size: 16pt; font-weight: 600; color: #1d4ed8; }
+.paper .ProseMirror .toc-entry { display: flex; align-items: baseline; margin: 0 0 0.2em; line-height: 1.4; }
+.paper .ProseMirror .toc-entry::before { content: ""; order: 1; flex: 1 1 1.2em; min-width: 1.2em; margin: 0 0.35em; border-bottom: 1px dotted currentColor; transform: translateY(-0.25em); opacity: 0.7; }
+.paper .ProseMirror .toc-entry::after { content: attr(data-page); order: 2; min-width: 1.2em; text-align: right; }
+.paper .ProseMirror .toc-entry[data-level="1"] { font-weight: 600; }
+.paper .ProseMirror .toc-entry[data-level="2"] { padding-left: 1.2em; }
+.paper .ProseMirror .toc-entry[data-level="3"] { padding-left: 2.4em; }
+
+/* Captions ("Figure 1 : …"): a paragraph with a numbering field. */
+.paper .ProseMirror p[data-caption] { font-size: 0.9em; font-style: italic; color: #44546a; margin-top: 0.3em; margin-bottom: 0.8em; }
+.paper .ProseMirror .seq-field { font-style: inherit; }
+
+/* Notes: the raised number in the text, and the block of endnotes at the end of the document. */
+.paper .ProseMirror .note-ref { vertical-align: super; font-size: 0.72em; line-height: 0; color: #1d4ed8; cursor: pointer; padding: 0 1px; }
+.paper .ProseMirror .endnotes { margin-top: 1.6em; border-top: 1px solid #9ca3af; padding-top: 0.5em; }
+.paper .ProseMirror .endnotes::before { content: attr(data-title); display: block; margin-bottom: 0.4em; font-size: 13pt; font-weight: 600; }
+.paper .ProseMirror .endnote-item { display: flex; gap: 0.5em; margin: 0 0 0.25em; font-size: 0.88em; line-height: 1.4; }
+.paper .ProseMirror .endnote-item::before { content: attr(data-label) "."; min-width: 1.6em; text-align: right; color: #1d4ed8; flex: none; }
+
+/* Footnotes: at the bottom of the text area of their page (PageSheets), under a short rule. The engine keeps room for them. */
+.page-notes { position: absolute; z-index: 1; padding-top: 12px; color: #1b1c1c; }
+.page-notes, .footnote-probe { font-size: calc(var(--doc-size, 11pt) * 0.85); line-height: 1.35; font-family: var(--doc-font, inherit); }
+.page-notes::before { content: ""; position: absolute; top: 5px; left: 0; width: 33%; border-top: 1px solid #6b7280; }
+.footnote-item { margin: 0 0 2px; }
+.footnote-num { font-size: 0.8em; vertical-align: super; line-height: 0; margin-right: 0.2em; color: #1d4ed8; }
+.page-notes .footnote-item { cursor: default; }
+
+/* Citations and bibliography. */
+.paper .ProseMirror .citation { cursor: pointer; border-radius: 2px; background: rgba(37, 99, 235, 0.06); }
+.paper .ProseMirror .bibliography { margin: 1.2em 0; }
+.paper .ProseMirror .bibliography::before { content: attr(data-title); display: block; margin: 0 0 0.5em; font-size: 16pt; font-weight: 600; color: #1d4ed8; }
+.paper .ProseMirror .bib-entry { margin: 0 0 0.5em; padding-left: 2em; text-indent: -2em; line-height: 1.45; }

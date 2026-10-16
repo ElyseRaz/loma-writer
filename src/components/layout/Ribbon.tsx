@@ -5,7 +5,8 @@ import type { RibbonTabId } from "../../state/types";
 import { HomeTab } from "../ribbon/HomeTab";
 import { InsertTab } from "../ribbon/InsertTab";
 import { LayoutTab } from "../ribbon/LayoutTab";
-import { ReferencesTab, ReviewTab, ViewTab } from "../ribbon/OtherTabs";
+import { ReviewTab, ViewTab } from "../ribbon/OtherTabs";
+import { ReferencesTab } from "../ribbon/ReferencesTab";
 
 const TABS: Array<{ id: RibbonTabId; label: string }> = [
   { id: "home", label: "Accueil" },

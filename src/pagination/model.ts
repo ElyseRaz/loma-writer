@@ -62,6 +62,10 @@ export interface Atom {
   section?: number;
   /** Section breaks: the next section continues on the same page (it can only change the columns). */
   continuous?: boolean;
+  /** Text only: the height of the footnotes anchored in each line (aligned with `lines()`); they take room at the bottom of the page. */
+  noteHeights?: () => number[];
+  /** Other atoms (table rows, blocks): the height of all the footnotes anchored in them. */
+  noteTotal?: number;
   /** Text only: measures the line boxes (natural coordinates). Called lazily, only for atoms crossing a page end. */
   lines?: () => LineBox[];
 }
@@ -131,8 +135,13 @@ export interface Sheet {
   indexInSection: number;
 }
 
+/** Height kept at the bottom of a page, above the first footnote: the separator rule and its spacing. */
+export const FOOTNOTE_SEPARATOR = 14;
+
 export interface PaginationResult {
   breaks: PageBreak[];
+  /** Height reserved at the bottom of each page for its footnotes (separator included), by page index. */
+  reserved: number[];
   pages: number;
   /** Page index (0-based) where each atom starts. */
   startPage: number[];

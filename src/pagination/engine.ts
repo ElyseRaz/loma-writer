@@ -1,4 +1,4 @@
-import type { Atom, Band, Fragment, Placement, PageBreak, PageGeometry, PaginationResult, Sheet } from "./model";
+import { FOOTNOTE_SEPARATOR, type Atom, type Band, type Fragment, type Placement, type PageBreak, type PageGeometry, type PaginationResult, type Sheet } from "./model";
 
 export interface EngineOptions {
   /** Minimum lines of a paragraph left at the bottom of a page. */
@@ -34,6 +34,13 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
   const oversize: number[] = [];
   const placements: Array<Placement | null> = atoms.map(() => null);
   const bands: Band[] = [];
+  // Footnotes: the room kept at the bottom of each page (separator included) for the notes of the lines placed on it.
+  const reserved = new Map<number, number>();
+  const res = (p: number) => reserved.get(p) ?? 0;
+  /** What the page still has to give up for `add` more px of notes (the first note also brings the separator). */
+  const noteCost = (p: number, add: number) => (add > 0 ? add + (res(p) === 0 ? FOOTNOTE_SEPARATOR : 0) : 0);
+  const reserve = (p: number, cost: number) => { if (cost > 0) reserved.set(p, res(p) + cost); };
+  const sumNotes = (a: Atom, from: number, to: number) => { const nh = a.noteHeights?.(); if (!nh) return 0; let s = 0; for (let k = from; k < to && k < nh.length; k++) s += nh[k] || 0; return s; };
 
   let offset = 0;
   let startOffset = 0; // offset applied to the first part of the current atom
@@ -287,15 +294,18 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
       const bottom = (lines ? lines[lines.length - 1].bottom : a.bottom) + offset;
       const remainingTop = lines ? lines[linesDone].top + offset : top;
       const p = pageOf(remainingTop);
-      const limit = contentTop(p) + H;
+      const limit = contentTop(p) + H - res(p); // the notes of the lines already placed on this page are at its bottom
       const pageTop = contentTop(p);
+      const noteAdd = lines ? sumNotes(a, linesDone, lines.length) : a.noteTotal ?? 0;
+      const noteNeed = noteCost(p, noteAdd);
 
-      if (bottom <= limit + EPS) {
+      if (bottom + noteNeed <= limit + EPS) {
         // Fits. A heading still has to stay with the beginning of what follows.
         if (linesDone === 0 && a.keepWithNext && remainingTop > pageTop + EPS && remainingTop + keepExtent(i) > limit + EPS) {
           move(contentTop(p + 1) - top, null);
           continue;
         }
+        reserve(p, noteNeed);
         break;
       }
 
@@ -303,10 +313,16 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
       if (lines && !a.keepLines && remainingTop < limit - EPS) {
         const total = lines.length;
         let fit = 0;
-        for (let k = linesDone; k < total && lines[k].bottom + offset <= limit + EPS; k++) fit = k + 1;
+        let acc = 0; // notes of the lines kept on this page
+        for (let k = linesDone; k < total; k++) {
+          acc += a.noteHeights?.()[k] ?? 0;
+          if (lines[k].bottom + offset + noteCost(p, acc) > limit + EPS) break;
+          fit = k + 1;
+        }
         let first = fit; // first line that moves to the next page
         if (total - first < widows) first = total - widows;
         if (first - linesDone >= orphans && first < total) {
+          reserve(p, noteCost(p, sumNotes(a, linesDone, first)));
           const spacer = contentTop(p + 1) - (lines[first].top + offset);
           breaks.push({ atom: i, line: first, spacer });
           offset += spacer;
@@ -368,7 +384,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
       sheets.push({ top, left: (maxWidth - sec.g.width) / 2, width: sec.g.width, height: sec.g.height, insetTop: sec.g.insetTop, insetBottom: sec.g.insetBottom, insetLeft: sec.g.insetLeft, insetRight: sec.g.insetRight, section: sec.idx, indexInSection: k - sec.startPage });
     }
   });
-  return { breaks, pages, startPage, oversize, sheets, placements, bands };
+  return { breaks, reserved: Array.from({ length: pages }, (_, p) => res(p)), pages, startPage, oversize, sheets, placements, bands };
 }
 
 /**

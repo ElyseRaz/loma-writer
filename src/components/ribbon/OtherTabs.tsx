@@ -1,29 +1,7 @@
-import { BookMarked, BookText, Calculator, Check, Eye, ListTree, MessageSquarePlus, Quote, ScanEye, TextQuote, Globe, BookOpenText, GitCompare, X } from "lucide-react";
+import { Check, Eye, MessageSquarePlus, ScanEye, Globe, GitCompare, X } from "lucide-react";
 import { useApp } from "../../state/store";
 import { CommandButton, RibbonButton } from "../ui/RibbonButton";
 import { RibbonGroup, RibbonStack } from "./RibbonParts";
-
-export function ReferencesTab() {
-  return (
-    <>
-      <RibbonGroup label="Table des matières">
-        <RibbonButton icon={ListTree} size="lg" label="Table des matières" soon />
-        <RibbonButton icon={BookText} size="lg" label="Mettre à jour" soon />
-      </RibbonGroup>
-      <RibbonGroup label="Notes">
-        <RibbonButton icon={TextQuote} size="lg" label="Note de bas de page" soon />
-        <RibbonButton icon={BookMarked} size="lg" label="Note de fin" soon />
-      </RibbonGroup>
-      <RibbonGroup label="Citations">
-        <RibbonButton icon={Quote} size="lg" label="Insérer une citation" soon />
-        <RibbonButton icon={BookOpenText} size="lg" label="Bibliographie" soon />
-      </RibbonGroup>
-      <RibbonGroup label="Légendes">
-        <RibbonButton icon={Calculator} size="lg" label="Insérer une légende" soon />
-      </RibbonGroup>
-    </>
-  );
-}
 
 export function ReviewTab() {
   return (

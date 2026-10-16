@@ -69,7 +69,7 @@ export interface DocumentMeta {
   lossy: string[];
 }
 
-export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "paragraph" | "watermark" | "pageNumber" | "columns" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | null;
+export type DialogId = "preferences" | "about" | "link" | "wordCount" | "palette" | "unsaved" | "importReport" | "lossySave" | "margins" | "paper" | "paragraph" | "watermark" | "pageNumber" | "columns" | "tableSize" | "styles" | "headerFooter" | "coverPage" | "icons" | "chart" | "bookmark" | "crossRef" | "equation" | "caption" | "note" | "sources" | null;
 
 export interface AppState {
   theme: ThemeMode;
@@ -97,6 +97,12 @@ export interface AppState {
   hfKind: "header" | "footer";
   /** Position of the equation being edited (null: a new one). */
   equationPos: number | null;
+  /** Position of the note being edited (null: a new note). */
+  notePos: number | null;
+  /** Tag of the source the sources dialog opens on ("__new": a new one). */
+  sourceEdit: string | null;
+  /** Kind of the note being inserted. */
+  noteKind: "foot" | "end";
   prefs: Preferences;
   doc: DocumentMeta;
   dialog: DialogId;

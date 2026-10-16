@@ -70,6 +70,7 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
 
   const snapshot = useCallback((ed: Editor): DocumentModel => {
     const { page, prefs, headerFooter, docStyles, watermark } = stateRef.current;
+    ed.commands.updateTableOfContents(); // the page numbers of the tables of contents are those of the last layout
     return { content: ed.getJSON(), page, headerFooter, styles: docStyles, watermark, defaults: { fontFamily: prefs.fontFamily, fontSizePt: prefs.fontSizePt } };
   }, []);
 
@@ -193,7 +194,7 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
   const print = useCallback(() => {
     set({ view: "editor" });
     // Let the editor view mount before the print dialog snapshots the page.
-    setTimeout(() => { const warning = paperWarning(); if (warning) notify(warning); void printPage().catch((e) => notify(`Impression impossible : ${errorMessage(e)}`, "error")); }, 150);
+    setTimeout(() => { editor?.commands.updateTableOfContents(); const warning = paperWarning(); if (warning) notify(warning); void printPage().catch((e) => notify(`Impression impossible : ${errorMessage(e)}`, "error")); }, 150);
   }, [set, notify]);
 
   const quit = useCallback(

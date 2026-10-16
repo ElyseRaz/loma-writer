@@ -12,6 +12,9 @@ import { WatermarkDialog } from "./components/dialogs/WatermarkDialog";
 import { ParagraphDialog } from "./components/dialogs/ParagraphDialog";
 import { StyleDialog } from "./components/dialogs/StyleDialog";
 import { TableSizeDialog } from "./components/dialogs/TableSizeDialog";
+import { CaptionDialog } from "./components/dialogs/CaptionDialog";
+import { NoteDialog } from "./components/dialogs/NoteDialog";
+import { SourcesDialog } from "./components/dialogs/SourcesDialog";
 import { BookmarkDialog, ChartDialog, CoverPageDialog, CrossRefDialog, EquationDialog, IconsDialog } from "./components/dialogs/InsertDialogs";
 import { AboutDialog, ImportReportDialog, LinkDialog, LossySaveDialog, PreferencesDialog, UnsavedDialog, WordCountDialog } from "./components/dialogs/Dialogs";
 import { FindBar } from "./components/layout/FindBar";
@@ -56,6 +59,9 @@ function Shell() {
       {state.dialog === "pageNumber" && <PageNumberDialog />}
       {state.dialog === "columns" && <ColumnsDialog />}
       {state.dialog === "tableSize" && <TableSizeDialog />}
+      {state.dialog === "caption" && <CaptionDialog />}
+      {state.dialog === "note" && <NoteDialog />}
+      {state.dialog === "sources" && <SourcesDialog />}
       {(state.dialog === "margins" || state.dialog === "paper") && <PageSetupDialog key={state.dialog} initialTab={state.dialog === "paper" ? "paper" : "margins"} />}
       {state.dialog === "importReport" && <ImportReportDialog />}
       {state.dialog === "lossySave" && <LossySaveDialog />}

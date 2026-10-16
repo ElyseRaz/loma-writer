@@ -4,6 +4,7 @@ import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { Editor } from "@tiptap/react";
 import { paginate } from "./engine";
 import { collectAtoms, FRAME_PROPS, type AtomRef } from "./measure";
+import type { PageStart } from "./pageIndex";
 import type { Band, PageGeometry, Sheet } from "./model";
 
 export interface PaginationState {
@@ -44,6 +45,17 @@ interface Storage {
   dirty: boolean;
   /** Called after each layout, with the number of pages. */
   onLayout?: (pages: number) => void;
+  /** Page where each block of the last layout starts (tables of contents read it). */
+  pageStarts: PageStart[];
+  /** The footnotes of each page (by page index) as drawn by the last layout, for the sheets to show. */
+  pageNotes: Record<number, PageNote[]>;
+}
+
+/** A footnote as shown at the bottom of its page. */
+export interface PageNote {
+  pos: number;
+  n: number;
+  text: string;
 }
 
 const storageOf = (editor: Editor) => (editor.storage as unknown as { pagination: Storage }).pagination;
@@ -120,7 +132,7 @@ export const Pagination = Extension.create({
   name: "pagination",
 
   addStorage(): Storage {
-    return { geometry: null, geometries: [], scale: 1, dirty: false };
+    return { geometry: null, geometries: [], scale: 1, dirty: false, pageStarts: [], pageNotes: {} };
   },
 
   addProseMirrorPlugins() {
@@ -338,6 +350,67 @@ function frame(source: HTMLElement, left: number, top: number, height: number): 
   return el;
 }
 
+/** Height a footnote takes at the bottom of a page of the given text width (measured in a hidden copy of the note's style). */
+function makeNoteMeasurer(view: EditorView, width: number, scale: number): { height: (text: string, n: number) => number; dispose: () => void } {
+  const host = view.dom.parentElement;
+  let probe: HTMLElement | null = null;
+  const cache = new Map<string, number>();
+  return {
+    height(text, n) {
+      const key = `${n}|${text}`;
+      const known = cache.get(key);
+      if (known !== undefined) return known;
+      if (!host) return 20;
+      if (!probe) {
+        probe = document.createElement("div");
+        probe.className = "footnote-probe";
+        probe.setAttribute("aria-hidden", "true");
+        probe.style.cssText = `position:absolute;visibility:hidden;left:-99999px;top:0;width:${width}px`;
+        host.appendChild(probe);
+      }
+      probe.replaceChildren();
+      probe.append(footnoteItem(n, text));
+      const h = probe.getBoundingClientRect().height / scale;
+      cache.set(key, h);
+      return h;
+    },
+    dispose: () => probe?.remove(),
+  };
+}
+
+/** One footnote as drawn (number and text); the stylesheet gives it its size. */
+export function footnoteItem(n: number, text: string): HTMLElement {
+  const item = document.createElement("div");
+  item.className = "footnote-item";
+  const num = document.createElement("span");
+  num.className = "footnote-num";
+  num.textContent = String(n);
+  item.append(num, document.createTextNode(` ${text || "\u00a0"}`));
+  return item;
+}
+
+/** The footnotes of every page, from where their references really are on the page. */
+function computePageNotes(view: EditorView, storage: Storage) {
+  const sheets = paginationKey.getState(view.state)?.sheets ?? [];
+  const next: Record<number, PageNote[]> = {};
+  if (sheets.length) {
+    const scale = storage.scale || 1;
+    const origin = view.dom.getBoundingClientRect().top;
+    view.state.doc.descendants((node, pos) => {
+      if (node.type.name === "endnotes") return false;
+      if (node.type.name !== "footnote" || node.attrs.kind !== "foot") return true;
+      const el = view.nodeDOM(pos);
+      if (!(el instanceof HTMLElement)) return false;
+      const y = (el.getBoundingClientRect().top - origin) / scale;
+      let page = 0;
+      sheets.forEach((s, i) => { if (s.top + s.insetTop <= y + 1) page = i; });
+      (next[page] ??= []).push({ pos, n: +node.attrs.n || 1, text: String(node.attrs.text ?? "") });
+      return false;
+    });
+  }
+  if (JSON.stringify(next) !== JSON.stringify(storage.pageNotes)) storage.pageNotes = next;
+}
+
 /** Position of the character under a point that lies on text moved by a column layout (`.col-shift` spans); null elsewhere. */
 function shiftedPosAtCoords(view: EditorView, coords: { left: number; top: number }): { pos: number; inside: number } | null {
   const hit = document.elementsFromPoint(coords.left, coords.top).find((e) => e instanceof HTMLElement && e.classList.contains("col-shift") && e.tagName === "SPAN");
@@ -408,11 +481,18 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
   let atoms;
   try {
     const origin = view.dom.getBoundingClientRect().top;
-    ({ atoms, refs } = collectAtoms(view, origin, scale, storage.geometries.map((g) => !!g.columns && g.columns.count > 1)));
-    result = paginate(atoms, storage.geometries.length ? storage.geometries : geom);
+    const notes = makeNoteMeasurer(view, geom.width - geom.insetLeft - geom.insetRight, scale);
+    try {
+      ({ atoms, refs } = collectAtoms(view, origin, scale, storage.geometries.map((g) => !!g.columns && g.columns.count > 1), notes.height));
+      result = paginate(atoms, storage.geometries.length ? storage.geometries : geom);
+    } finally {
+      notes.dispose();
+    }
   } finally {
     view.dom.classList.remove("pg-measuring");
   }
+
+  storage.pageStarts = refs.map((r, i) => ({ pos: r.pos, page: result.startPage[i] ?? 0 })).sort((a, b) => a.pos - b.pos);
 
   // Merge breaks that land on the same position, and remember where each moved block must end up.
   const merged = new Map<string, { pos: number; kind: "block" | "inline" | "row"; spacer: number; columns: number; target: number; headers: HTMLTableRowElement[]; region?: { margin: number; pages: number } }>();
@@ -559,5 +639,6 @@ function verify(view: EditorView, storage: Storage) {
     const delta = (target - actual) / scale;
     if (Math.abs(delta) > 0.5) setHeight(el, Math.max(0, +(el.dataset.h ?? 0) + delta));
   });
+  computePageNotes(view, storage);
   window.dispatchEvent(new Event("loma:layout")); // free shapes follow their anchor
 }

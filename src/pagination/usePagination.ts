@@ -1,5 +1,6 @@
 import { useEditorState, type Editor } from "@tiptap/react";
-import { paginationKey } from "./extension";
+import { useEffect, useState } from "react";
+import { paginationKey, type PageNote } from "./extension";
 import type { Band, Sheet } from "./model";
 
 export interface PageInfo {
@@ -48,4 +49,20 @@ export function usePaginationSheets(editor: Editor | null): Sheet[] {
 /** The vertical rules between columns of the last layout (engine coordinates). */
 export function usePaginationBands(editor: Editor | null): Band[] {
   return useEditorState({ editor, selector: ({ editor: e }) => (e ? paginationKey.getState(e.state)?.bands ?? [] : []) }) ?? [];
+}
+
+/** The footnotes of each page (by page index), updated after every layout. */
+export function usePageNotes(editor: Editor | null): Record<number, PageNote[]> {
+  const [notes, setNotes] = useState<Record<number, PageNote[]>>({});
+  useEffect(() => {
+    if (!editor) return;
+    const read = () => {
+      const next = (editor.storage as unknown as { pagination?: { pageNotes: Record<number, PageNote[]> } }).pagination?.pageNotes ?? {};
+      setNotes((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+    };
+    read();
+    window.addEventListener("loma:layout", read);
+    return () => window.removeEventListener("loma:layout", read);
+  }, [editor]);
+  return notes;
 }

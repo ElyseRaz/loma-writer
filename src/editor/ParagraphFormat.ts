@@ -19,7 +19,7 @@ export const DEFAULT_LAYOUT: ParagraphLayout = { indentLeft: 0, indentRight: 0, 
 export const MAX_INDENT_CM = 20;
 export const MAX_SPACE_PT = 200;
 
-const TEXT_BLOCKS = ["paragraph", "heading"];
+const TEXT_BLOCKS = ["paragraph", "heading"]; // (the lines of a table of contents keep the default layout)
 const fin = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const r2 = (v: number) => Math.round(v * 100) / 100;

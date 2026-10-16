@@ -14,6 +14,8 @@ import JSZip from "jszip";
 import { marginsPx, pageDimensions } from "../../state/types";
 import { effectiveMarginsCm, isMirrored, paperCm } from "../../state/page";
 import { pxToCm } from "./page";
+import { formatPageNumber } from "../../pagination/pageNumber";
+import { cleanSources, isCitationStyle, type Source, type SourceType } from "../../editor/references/sources";
 import type { PM, Mark } from "./pm";
 import { latexToMathml } from "../math/mathml";
 import { isKnownShape, NONE, TEXT_BOX } from "../../editor/shapes/catalog";
@@ -44,6 +46,15 @@ class Ctx {
   /** Page number the next top-level paragraph restarts at (`style:page-number`). */
   pendingStart: number | null = null;
   sectionStyles: string[] = [];
+  /** Sources of the document, by tag (what the bibliography marks are written from). */
+  sources = new Map<string, Source>();
+  /** Tables of contents written so far (their names), and the width of the text for their right tab. */
+  tocs = 0;
+  /** Numbering sequences used by the captions (declared at the start of the text), and a counter of their references. */
+  seqLabels = new Set<string>();
+  seqRefs = 0;
+  noteIds = 0;
+  tocWidth = "16cm";
   takeMaster(): string | null { const m = this.pendingMaster; this.pendingMaster = null; return m; }
   takeStart(): number | null { const s = this.pendingStart; this.pendingStart = null; return s; }
   pictures: Array<{ name: string; bytes: Uint8Array }> = [];
@@ -133,6 +144,26 @@ function inline(ctx: Ctx, nodes: PM[] = []): string {
   for (const n of nodes) {
     if (n.type === "hardBreak") out += "<text:line-break/>";
     else if (n.type === "pageField") out += n.attrs?.kind === "pages" ? "<text:page-count>1</text:page-count>" : '<text:page-number text:select-page="current">1</text:page-number>';
+    else if (n.type === "citation") {
+      const tag = String(n.attrs?.tag ?? "");
+      const s = ctx.sources.get(tag);
+      const ODF_TYPE: Record<SourceType, string> = { book: "book", article: "article", web: "www", report: "techreport", other: "misc" };
+      const attrs = s
+        ? ` text:bibliography-type="${ODF_TYPE[s.type]}" text:author="${esc(s.authors.map((p) => (p.first ? `${p.last}, ${p.first}` : p.last)).join("; "))}" text:title="${esc(s.title)}" text:year="${esc(s.year)}" ${s.type === "article" ? "text:journal" : "text:publisher"}="${esc(s.publisher)}" text:address="${esc(s.city)}" text:volume="${esc(s.volume)}" text:pages="${esc(s.pages)}" text:url="${esc(s.url)}"`
+        : ' text:bibliography-type="misc"';
+      out += `<text:bibliography-mark text:identifier="${esc(tag)}"${attrs}${n.attrs?.page ? ` text:custom1="${esc(`page:${n.attrs.page}`)}"` : ""}>${esc(String(n.attrs?.text ?? ""))}</text:bibliography-mark>`;
+    }
+    else if (n.type === "footnote") {
+      const end = n.attrs?.kind === "end";
+      const id = `${end ? "edn" : "ftn"}${++ctx.noteIds}`;
+      const label = end ? formatPageNumber(Math.max(1, +n.attrs?.n || 1), "lowerRoman") : String(Math.max(1, +n.attrs?.n || 1));
+      out += `<text:note text:id="${id}" text:note-class="${end ? "endnote" : "footnote"}"><text:note-citation>${label}</text:note-citation><text:note-body><text:p text:style-name="Standard">${esc(String(n.attrs?.text ?? ""))}</text:p></text:note-body></text:note>`;
+    }
+    else if (n.type === "seqField") {
+      const label = String(n.attrs?.label ?? "Figure");
+      ctx.seqLabels.add(label);
+      out += `<text:sequence text:ref-name="ref${esc(label)}${ctx.seqRefs++}" text:name="${esc(label)}" text:formula="ooow:${esc(label)}+1" style:num-format="1">${Math.max(1, Math.trunc(Number(n.attrs?.n)) || 1)}</text:sequence>`;
+    }
     else if (n.type === "bookmark") out += `<text:bookmark text:name="${esc(String(n.attrs?.name ?? "signet"))}"/>`;
     else if (n.type === "equation") {
       // An embedded formula object (MathML), the way LibreOffice Math stores equations.
@@ -299,6 +330,32 @@ function shapeOdt(ctx: Ctx, n: PM): string {
   return "";
 }
 
+const tocText = (n: PM): string => (n.text ?? "") + (n.content ?? []).map(tocText).join("");
+
+/** A table of contents as OpenDocument has it: the source (what LibreOffice regenerates it from) and the lines as last generated. */
+function tocBlock(ctx: Ctx, n: PM): string {
+  const levels = Math.min(3, Math.max(1, Math.trunc(Number(n.attrs?.levels)) || 3));
+  const title = esc(String(n.attrs?.title ?? ""));
+  if (n.attrs?.kind === "captions" && typeof n.attrs.label === "string") {
+    // A list of figures / tables: LibreOffice's illustration index of the sequence.
+    const label = esc(n.attrs.label);
+    const name = `Illustration_Index${++ctx.tocs}`;
+    const lines = (n.content ?? []).filter((e) => e.type === "tocEntry").map((e) => `<text:p text:style-name="Illustration_20_Index_20_1">${esc(tocText(e))}<text:tab/>${esc(String(e.attrs?.page ?? ""))}</text:p>`).join("");
+    return `<text:illustration-index text:protected="false" text:name="${name}"><text:illustration-index-source text:caption-sequence-name="${label}" text:caption-sequence-format="text" text:use-caption="true">${title ? `<text:index-title-template text:style-name="Contents_20_Heading">${title}</text:index-title-template>` : ""}<text:illustration-index-entry-template text:style-name="Illustration_20_Index_20_1"><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/></text:illustration-index-entry-template></text:illustration-index-source><text:index-body>${title ? `<text:index-title text:name="${name}_Head"><text:p text:style-name="Contents_20_Heading">${title}</text:p></text:index-title>` : ""}${lines}</text:index-body></text:illustration-index>`;
+  }
+  const templates = Array.from({ length: levels }, (_, i) => `<text:table-of-content-entry-template text:outline-level="${i + 1}" text:style-name="Contents_20_${i + 1}"><text:index-entry-chapter/><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/></text:table-of-content-entry-template>`).join("");
+  const lines = (n.content ?? []).filter((e) => e.type === "tocEntry").map((e) => `<text:p text:style-name="Contents_20_${Math.min(3, Math.max(1, Math.trunc(Number(e.attrs?.level)) || 1))}">${esc(tocText(e))}<text:tab/>${esc(String(e.attrs?.page ?? ""))}</text:p>`).join("");
+  const name = `Table_of_Contents${++ctx.tocs}`;
+  return `<text:table-of-content text:protected="false" text:name="${name}"><text:table-of-content-source text:outline-level="${levels}">${title ? `<text:index-title-template text:style-name="Contents_20_Heading">${title}</text:index-title-template>` : ""}${templates}</text:table-of-content-source><text:index-body>${title ? `<text:index-title text:name="${name}_Head"><text:p text:style-name="Contents_20_Heading">${title}</text:p></text:index-title>` : ""}${lines}</text:index-body></text:table-of-content>`;
+}
+
+/** A bibliography: its entries as last generated (LibreOffice rewrites them from the marks when it updates the index). */
+function bibliographyBlock(n: PM): string {
+  const title = esc(String(n.attrs?.title ?? ""));
+  const entries = (n.content ?? []).filter((e) => e.type === "bibEntry").map((e) => `<text:p text:style-name="Bibliography_20_1">${(e.content ?? []).map((c) => esc(c.text ?? "")).join("")}</text:p>`).join("");
+  return `<text:bibliography text:protected="false" text:name="Bibliography1"><text:bibliography-source>${title ? `<text:index-title-template text:style-name="Contents_20_Heading">${title}</text:index-title-template>` : ""}</text:bibliography-source><text:index-body>${title ? `<text:index-title text:name="Bibliography1_Head"><text:p text:style-name="Contents_20_Heading">${title}</text:p></text:index-title>` : ""}${entries}</text:index-body></text:bibliography>`;
+}
+
 function blocks(ctx: Ctx, nodes: PM[] = [], listStyle?: string): string {
   let out = "";
   const flush = () => { if (ctx.anchored.length) { out += `<text:p text:style-name="${ctx.paraStyle("Standard")}">${ctx.anchored.join("")}</text:p>`; ctx.anchored = []; } };
@@ -307,7 +364,10 @@ function blocks(ctx: Ctx, nodes: PM[] = [], listStyle?: string): string {
     if ((ctx.pendingMaster || ctx.pendingStart !== null) && n.type !== "paragraph" && n.type !== "heading") out += `<text:p text:style-name="${ctx.paraStyle("Standard", undefined, undefined, undefined, ctx.takeMaster(), ctx.takeStart())}"/>`;
     if (n.type !== "paragraph" && n.type !== "heading" && n.type !== "shape" && n.type !== "shapeGroup") flush();
     switch (n.type) {
-      case "paragraph": case "heading": out += para(ctx, n); break;
+      case "paragraph": case "heading": out += para(ctx, n, typeof n.attrs?.caption === "string" ? "Caption" : "Standard"); break;
+      case "bibliography": out += bibliographyBlock(n); break;
+      case "endnotes": break; // generated from the references (LibreOffice and Word place their own)
+      case "tableOfContents": out += tocBlock(ctx, n); break;
       case "blockquote": for (const c of n.content ?? []) out += c.type === "paragraph" ? para(ctx, c, "Quote") : blocks(ctx, [c]); break;
       case "codeBlock":
         for (const line of (n.content?.map((c) => c.text).join("") ?? "").split("\n"))
@@ -451,6 +511,8 @@ function pageLayout(sec: OdtSection, i: number): string {
 }
 
 function namedStyles(model: DocumentModel, sections: OdtSection[], hfStyles: string, gradients: string): string {
+  // The right tab of a table of contents line is at the right edge of the text of the first section.
+  const tocWidth = (() => { const paper = paperCm(model.page); const w = model.page.orientation === "landscape" ? paper.height : paper.width; const mg = effectiveMarginsCm(model.page); return `${(w - mg.left - mg.right).toFixed(2)}cm`; })();
   const font = esc(model.defaults?.fontFamily ?? "Liberation Serif");
   const size = model.defaults?.fontSizePt ?? 12;
   // Paragraph styles in full (the built-in look plus the user's edits), so other editors show the same.
@@ -472,6 +534,11 @@ function namedStyles(model: DocumentModel, sections: OdtSection[], hfStyles: str
 <office:document-styles ${NS} office:version="1.3">
 <office:styles>
 <style:default-style style:family="paragraph"><style:paragraph-properties fo:orphans="2" fo:widows="2"/><style:text-properties fo:font-family="${font}" fo:font-size="${size}pt" fo:language="fr" fo:country="FR"/></style:default-style>
+<style:style style:name="Bibliography_20_1" style:display-name="Bibliography 1" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-left="0.85cm" fo:text-indent="-0.85cm" fo:margin-bottom="0.2cm"/></style:style>
+<style:style style:name="Caption" style:family="paragraph" style:parent-style-name="Standard" style:class="extra"><style:paragraph-properties fo:margin-top="0.1cm" fo:margin-bottom="0.28cm"/><style:text-properties fo:font-size="9pt" fo:font-style="italic" fo:color="#44546a"/></style:style>
+<style:style style:name="Illustration_20_Index_20_1" style:display-name="Illustration Index 1" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-bottom="0.1cm"><style:tab-stops><style:tab-stop style:position="${tocWidth}" style:type="right" style:leader-style="dotted" style:leader-text="."/></style:tab-stops></style:paragraph-properties></style:style>
+<style:style style:name="Contents_20_Heading" style:display-name="Contents Heading" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-top="0.42cm" fo:margin-bottom="0.3cm"/><style:text-properties fo:font-size="16pt" fo:font-weight="bold" fo:color="#1d4ed8"/></style:style>
+${[1, 2, 3].map((l) => `<style:style style:name="Contents_20_${l}" style:display-name="Contents ${l}" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-left="${(l - 1) * 0.42}cm" fo:margin-bottom="0.1cm"><style:tab-stops><style:tab-stop style:position="${tocWidth}" style:type="right" style:leader-style="dotted" style:leader-text="."/></style:tab-stops></style:paragraph-properties>${l === 1 ? '<style:text-properties fo:font-weight="bold"/>' : ""}</style:style>`).join("\n")}
 <style:style style:name="Standard" style:family="paragraph" style:class="text"><style:paragraph-properties ${normal.para}/>${model.styles?.normal ? `<style:text-properties ${normal.text(false).replace(/fo:font-family="[^"]*" /, "")}/>` : ""}</style:style>
 ${heading(1)}${heading(2)}${heading(3)}
 <style:style style:name="Quote" style:display-name="Quote" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties ${quoteLook.para} fo:margin-left="1cm" fo:border-left="1.5pt solid #2563eb" fo:padding-left="0.3cm"/><style:text-properties ${quoteLook.text(true)}/></style:style>
@@ -504,6 +571,7 @@ export async function exportOdt(model: DocumentModel): Promise<ExportResult> {
       sections.push({ page, hf: !continuous && n.attrs?.hf ? sanitizeHeaderFooter(n.attrs.hf) : prev.hf, hfXml: "", nodes: [], continuous });
     } else sections[sections.length - 1].nodes.push(n);
   }
+  ctx.sources = new Map(cleanSources(model.content.attrs?.sources).map((s) => [s.tag, s]));
   let body = "";
   sections.forEach((sec, i) => {
     // A restart needs the paragraph to name its master page (that is how ODF ties a page number change to a page).
@@ -529,7 +597,7 @@ export async function exportOdt(model: DocumentModel): Promise<ExportResult> {
 <office:automatic-styles>
 ${automaticStyles(ctx, model)}
 </office:automatic-styles>
-<office:body><office:text>${body}</office:text></office:body>
+<office:body><office:text>${[...ctx.seqLabels].length ? `<text:sequence-decls>${[...ctx.seqLabels].map((l) => `<text:sequence-decl text:display-outline-level="0" text:name="${esc(l)}"/>`).join("")}</text:sequence-decls>` : ""}${body}</office:text></office:body>
 </office:document-content>`;
 
   const manifest = `<?xml version="1.0" encoding="UTF-8"?>
@@ -541,7 +609,9 @@ ${automaticStyles(ctx, model)}
 ${ctx.formulas.map((f) => `<manifest:file-entry manifest:full-path="${f.dir}/" manifest:media-type="application/vnd.oasis.opendocument.formula"/>\n<manifest:file-entry manifest:full-path="${f.dir}/content.xml" manifest:media-type="text/xml"/>`).join("\n")}
 ${[...ctx.pictures, ...hfCtx.pictures].map((p) => `<manifest:file-entry manifest:full-path="${p.name}" manifest:media-type="${p.name.endsWith(".png") ? "image/png" : p.name.endsWith(".jpg") ? "image/jpeg" : "image/" + p.name.split(".").pop()}"/>`).join("\n")}
 </manifest:manifest>`;
-  const meta = `<?xml version="1.0" encoding="UTF-8"?>\n<office:document-meta ${NS} office:version="1.3"><office:meta><meta:generator>Loma Writer</meta:generator></office:meta></office:document-meta>`;
+  // The sources and the style of the citations travel in the metadata (uncited sources have no mark to hold them).
+  const sourceList = cleanSources(model.content.attrs?.sources);
+  const meta = `<?xml version="1.0" encoding="UTF-8"?>\n<office:document-meta ${NS} office:version="1.3"><office:meta><meta:generator>Loma Writer</meta:generator>${sourceList.length ? `<meta:user-defined meta:name="LomaSources" meta:value-type="string">${esc(JSON.stringify(sourceList))}</meta:user-defined><meta:user-defined meta:name="LomaCitationStyle" meta:value-type="string">${isCitationStyle(model.content.attrs?.citationStyle) ? model.content.attrs.citationStyle : "apa"}</meta:user-defined>` : ""}</office:meta></office:document-meta>`;
 
   const zip = new JSZip();
   zip.file("mimetype", ODT_MIME, { compression: "STORE" }); // must be first and uncompressed

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { paginate, appliedOffset } from "../engine";
-import { pageGeometry, type Atom, type LineBox, type PageGeometry } from "../model";
+import { FOOTNOTE_SEPARATOR, pageGeometry, type Atom, type LineBox, type PageGeometry } from "../model";
 import { DEFAULT_PAGE } from "../../state/types";
 
 const A4: PageGeometry = pageGeometry(DEFAULT_PAGE); // 1123 high, 96 margins -> 931 content, pitch 1147
@@ -418,5 +418,43 @@ describe("columns", () => {
     const atoms = flow(Array(40).fill(8));
     const plain = paginate(atoms, pageGeometry(DEFAULT_PAGE));
     expect(plain.placements.every((p) => p === null)).toBe(true);
+  });
+});
+
+describe("footnotes", () => {
+  /** A paragraph of `n` lines with a note of `h` px anchored in line `at`. */
+  const withNote = (a: Atom, at: number, h: number): Atom => ({ ...a, noteHeights: () => Array.from({ length: a.lines!().length }, (_, k) => (k === at ? h : 0)) });
+
+  it("a note takes room at the bottom of its page: the text that would hide it moves on", () => {
+    const [p] = flow([38]); // 38 lines = 912px: fits a 931px page without notes
+    const plain = paginate([p], A4);
+    expect(plain.pages).toBe(1);
+    const noted = paginate([withNote(p, 0, 60)], A4);
+    expect(noted.pages).toBe(2);
+    expect(noted.reserved[0]).toBe(60 + FOOTNOTE_SEPARATOR);
+    // the lines kept on page 0 end above the notes
+    const split = noted.breaks.find((b) => b.line !== null)!;
+    const kept = split.line!;
+    expect(kept * LH + noted.reserved[0]).toBeLessThanOrEqual(A4.contentHeight + 0.5);
+  });
+
+  it("notes of lines that go to the next page are kept for that page", () => {
+    const [p] = flow([60]);
+    const res = paginate([withNote(p, 59, 50)], A4); // the note is on the last line
+    expect(res.pages).toBe(2);
+    expect(res.reserved[0]).toBe(0);
+    expect(res.reserved[1]).toBe(50 + FOOTNOTE_SEPARATOR);
+  });
+
+  it("the separator is paid once per page, however many notes there are", () => {
+    const [p] = flow([10]);
+    const res = paginate([{ ...p, noteHeights: () => [20, 0, 20, 0, 0, 0, 0, 0, 0, 20] }], A4);
+    expect(res.reserved[0]).toBe(60 + FOOTNOTE_SEPARATOR);
+  });
+
+  it("a block with notes (a table row) reserves them as a whole", () => {
+    const row: Atom = { kind: "row", top: 0, bottom: 40, noteTotal: 30 };
+    const res = paginate([row], A4);
+    expect(res.reserved[0]).toBe(30 + FOOTNOTE_SEPARATOR);
   });
 });

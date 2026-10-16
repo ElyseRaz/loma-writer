@@ -15,6 +15,10 @@ import { TableFit } from "./TableFit";
 import { ListTypes } from "./ListTypes";
 import { ColumnBreak, PageBreak } from "./PageBreak";
 import { Pagination } from "../pagination/extension";
+import { References, TableOfContents, TocEntry } from "./references/Toc";
+import { Captions, SeqField } from "./references/Captions";
+import { Endnotes, EndnoteItem, Footnote, Notes } from "./references/Notes";
+import { BibEntry, Bibliography, Citation, Citations, SourcesAttributes } from "./references/Citations";
 import { ParagraphFormat } from "./ParagraphFormat";
 import { BlockStyle } from "./BlockStyle";
 import { FindReplace } from "./FindReplace";
@@ -53,6 +57,20 @@ export function createExtensions(options: { pagination?: boolean } = {}): Extens
     Placeholder.configure({ placeholder: "Commencez à écrire…" }),
     PageBreak,
     ColumnBreak,
+    References,
+    TableOfContents,
+    TocEntry,
+    SeqField,
+    Captions,
+    Footnote,
+    EndnoteItem,
+    Endnotes,
+    Notes,
+    SourcesAttributes,
+    Citation,
+    BibEntry,
+    Bibliography,
+    Citations,
     ...(options.pagination === false ? [] : [Pagination]),
     BlockStyle,
     ParagraphFormat,

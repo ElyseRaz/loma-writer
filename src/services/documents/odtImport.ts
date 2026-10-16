@@ -3,6 +3,8 @@ import { builtinStyle, cleanStyles, STYLE_IDS, type DocStyles, type StyleId } fr
 import { bulletFromChar, numberFromFormat } from "./listFormats";
 import JSZip from "jszip";
 import { pageFromDimensions } from "./page";
+import { cleanSource, cleanSources, isCitationStyle, type CitationStyle, type Source } from "../../editor/references/sources";
+import { resolveTocTargets, type JsonNode } from "../../editor/references/tocBuild";
 import { ensureBlocks, hasVisibleContent, heading, mergeText, paragraph, splitEquations, textNode, type PM, type RunProps } from "./pm";
 import { corrupt, DocumentError, type ImportResult } from "./types";
 import { first, kids, mimeForPath, parseXml, toDataUri } from "./xml";
@@ -64,6 +66,8 @@ interface Ctx {
   currentHf?: HeaderFooterSettings;
   /** Page width and margins (px), to turn ODF positions into ours. */
   page?: { w: number; margins: { top: number; left: number; right: number } };
+  /** Sources met in the bibliography marks (by tag). */
+  sources?: Map<string, Source>;
   /** The `office:text` element being read (sections only start at its top level). */
   body?: Element;
   /** The top-level `text:section` being read, with its columns (it does not start a new page by itself). */
@@ -504,6 +508,22 @@ function inlineOf(ctx: Ctx, parent: Element, base: RunProps, out: PM[]) {
         break;
       }
       case "text:bookmark": case "text:bookmark-start": { const name = el.getAttribute("text:name"); if (name) out.push({ type: "bookmark", attrs: { name } }); break; }
+      case "text:bibliography-mark": {
+        // LibreOffice, reading a Word CITATION field, makes the whole instruction the identifier (" CITATION Dupont2020 \\l 1036 "), and the text of the citation its title.
+        const rawId = el.getAttribute("text:identifier") ?? "";
+        const wordField = /^\s*CITATION\s+(\S+)/.exec(rawId);
+        const tag = (wordField ? wordField[1] : rawId).replace(/[^\p{L}\p{N}_.:-]/gu, "");
+        if (tag) {
+          const type = ({ book: "book", article: "article", www: "web", techreport: "report", phdthesis: "report", mastersthesis: "report" } as Record<string, Source["type"]>)[el.getAttribute("text:bibliography-type") ?? ""] ?? "other";
+          const authors = (el.getAttribute("text:author") ?? "").split(/;| and /).map((a) => a.trim()).filter(Boolean).map((a) => { const [last, ...rest] = a.split(","); return { last: last.trim(), first: rest.join(",").trim() }; });
+          const src = cleanSource({ tag, type, authors, title: el.getAttribute("text:title"), year: el.getAttribute("text:year"), publisher: el.getAttribute("text:journal") || el.getAttribute("text:publisher"), city: el.getAttribute("text:address"), volume: el.getAttribute("text:volume"), pages: el.getAttribute("text:pages"), url: el.getAttribute("text:url") });
+          if (src && !wordField && (src.title || src.authors.length) && !(ctx.sources ??= new Map()).has(tag)) ctx.sources.set(tag, src);
+          const page = /^page:(.*)$/.exec(el.getAttribute("text:custom1") ?? "")?.[1] ?? "";
+          out.push({ type: "citation", attrs: { tag, page: page.slice(0, 40), text: "" } });
+        }
+        break;
+      }
+      case "text:sequence": { const label = el.getAttribute("text:name") || "Figure"; out.push({ type: "seqField", attrs: { label, n: Math.max(1, parseInt(el.textContent ?? "", 10) || 1) } }); break; }
       case "text:page-number": if (ctx.fields) out.push({ type: "pageField", attrs: { kind: "page" } }); else inlineOf(ctx, el, base, out); break;
       case "text:page-count": if (ctx.fields) out.push({ type: "pageField", attrs: { kind: "pages" } }); else inlineOf(ctx, el, base, out); break;
       case "text:s": out.push(textNode(" ".repeat(+(el.getAttribute("text:c") ?? 1)), base)); break;
@@ -518,7 +538,13 @@ function inlineOf(ctx: Ctx, parent: Element, base: RunProps, out: PM[]) {
         if (img) out.push(img);
         break;
       }
-      case "text:note": ctx.warnings.add("Notes de bas de page et de fin : non prises en charge, ignorées."); break;
+      case "text:note": {
+        const kind = el.getAttribute("text:note-class") === "endnote" ? "end" : "foot";
+        const body = first(el, "text:note-body");
+        const text = body ? Array.from(body.getElementsByTagName("text:p")).map((p) => p.textContent ?? "").join(" ").replace(/\s+/g, " ").trim() : "";
+        out.push({ type: "footnote", attrs: { kind, text: text.slice(0, 2000), n: 1 } });
+        break;
+      }
       case "office:annotation": ctx.warnings.add("Commentaires : non pris en charge, ignorés."); break;
       case "text:soft-page-break": case "text:bookmark-end": case "text:change": case "text:change-start": case "text:change-end": break;
       default: if (el.nodeName.startsWith("text:")) inlineOf(ctx, el, base, out);
@@ -606,6 +632,62 @@ function hoistShapes(node: PM, out: PM[]) {
   flush();
 }
 
+/** A paragraph holding a numbering field (text:sequence) is a caption of that label. */
+function markCaption(n: PM): void {
+  const seq = n.type === "paragraph" ? (n.content ?? []).find((c) => c.type === "seqField") : undefined;
+  if (seq) n.attrs = { ...(n.attrs ?? {}), caption: String(seq.attrs?.label ?? "Figure") };
+}
+
+/** The level of a "Contents N" style, looking up the parents (LibreOffice writes automatic styles P1, P2… based on it). */
+function contentsLevel(ctx: Ctx, name: string | null): RegExpExecArray | null {
+  for (let n = name, guard = 0; n && guard < 8; guard++) {
+    const style = ctx.styles.get(n);
+    const m = /contents[\s_]*(?:20_)?(\d)/i.exec(n) ?? /contents\s*(\d)/i.exec(style?.display ?? "");
+    if (m) return m;
+    n = style?.parent ?? null;
+  }
+  return null;
+}
+
+/** True when a paragraph style is (or is based on) "Contents Heading". */
+function isContentsHeading(ctx: Ctx, name: string | null): boolean {
+  for (let n = name, guard = 0; n && guard < 8; guard++) {
+    if (/contents[\s_]*(?:20_)?heading/i.test(n) || /contents\s*heading/i.test(ctx.styles.get(n)?.display ?? "")) return true;
+    n = ctx.styles.get(n)?.parent ?? null;
+  }
+  return false;
+}
+
+/** A table of contents (index body: the title, then one paragraph per entry with its page number after a tab). */
+function tocFromOdt(ctx: Ctx, el: Element): PM {
+  const body = first(el, "text:index-body");
+  const textOfEl = (n: Element): string => {
+    let t = "";
+    for (const c of Array.from(n.childNodes)) {
+      if (c.nodeType === 3) t += c.textContent ?? "";
+      else if (c instanceof Element) t += c.nodeName === "text:tab" ? "\t" : c.nodeName === "text:s" ? " ".repeat(+(c.getAttribute("text:c") ?? 1)) : c.nodeName === "text:line-break" ? " " : textOfEl(c);
+    }
+    return t;
+  };
+  let title = "";
+  const lines: PM[] = [];
+  for (const k of body ? kids(body) : []) {
+    if (k.nodeName === "text:index-title") { title = Array.from(k.children).map((p) => textOfEl(p)).join(" ").trim(); continue; }
+    if (k.nodeName !== "text:p" && k.nodeName !== "text:h") continue;
+    const lvl = contentsLevel(ctx, k.getAttribute("text:style-name"));
+    const raw = textOfEl(k);
+    const at = raw.lastIndexOf("\t");
+    const text = (at >= 0 ? raw.slice(0, at) : raw).replace(/\t/g, " ").trim();
+    lines.push({ type: "tocEntry", attrs: { level: Math.min(3, Math.max(1, lvl ? +lvl[1] : 1)), target: null, page: (at >= 0 ? raw.slice(at + 1).trim() : "").slice(0, 12) }, content: text ? [{ type: "text", text }] : [] });
+  }
+  const captionsOf = el.nodeName === "text:illustration-index" ? first(el, "text:illustration-index-source")?.getAttribute("text:caption-sequence-name") ?? null : null;
+  const levelAttr = +(first(el, "text:table-of-content-source")?.getAttribute("text:outline-level") ?? 3);
+  const levels = Math.min(3, Math.max(1, Number.isFinite(levelAttr) ? levelAttr : 3, ...lines.map((l) => +(l.attrs?.level ?? 1))));
+  return { type: "tableOfContents", attrs: { levels, kind: captionsOf ? "captions" : "headings", title: title || (captionsOf ? `Table : ${captionsOf}` : "Table des matières"), label: captionsOf, titleFound: !!title }, content: lines };
+}
+
+const tocResolved = (blocks: PM[]): PM[] => { const doc = { type: "doc", content: blocks } as JsonNode; resolveTocTargets(doc); return (doc.content ?? []) as PM[]; };
+
 function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, depth: number): PM[] {
   const out: PM[] = [];
   let quote: PM | null = null;
@@ -633,6 +715,7 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
           }
         }
         const { node, kind, before, after, column } = convertPara(ctx, el);
+        markCaption(node);
         if (before) { quote = code = null; out.push({ type: "pageBreak" }); }
         if (after && !node.content?.length) { quote = code = null; out.push({ type: "pageBreak" }); break; }
         if (column && !node.content?.length) { quote = code = null; out.push({ type: "columnBreak" }); break; }
@@ -679,7 +762,26 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
         break;
       }
       case "text:index-body": quote = code = null; out.push(...convertBlocks(ctx, el, listStyle, depth)); break;
-      case "text:table-of-content": ctx.warnings.add("Tables des matières : remplacées par leur dernier contenu généré."); out.push(...convertBlocks(ctx, first(el, "text:index-body") ?? el, listStyle, depth)); break;
+      case "text:bibliography": {
+        quote = code = null;
+        const title = Array.from(first(el, "text:index-title")?.children ?? []).map((p) => p.textContent ?? "").join(" ").trim();
+        out.push({ type: "bibliography", attrs: { title: title || "Bibliographie", mode: "cited" }, content: [] });
+        break;
+      }
+      case "text:illustration-index": case "text:table-of-content": {
+        quote = code = null;
+        const toc = tocFromOdt(ctx, el);
+        // The title may be an ordinary paragraph just before the table (style Contents Heading).
+        const prev = el.previousElementSibling;
+        const last = out[out.length - 1];
+        if (!toc.attrs?.titleFound && prev && prev.nodeName === "text:p" && isContentsHeading(ctx, prev.getAttribute("text:style-name")) && last?.type === "paragraph") {
+          toc.attrs = { ...toc.attrs, title: (last.content ?? []).map((c) => c.text ?? "").join("").trim() || toc.attrs?.title };
+          out.pop();
+        }
+        if (toc.attrs) delete toc.attrs.titleFound;
+        out.push(toc);
+        break;
+      }
       case "text:tracked-changes": ctx.warnings.add("Suivi des modifications : non pris en charge."); break;
       case "draw:frame": {
         if (first(el, "draw:text-box")) { out.push(shapeNode(ctx, el, true)); break; }
@@ -810,6 +912,14 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
     const hasSource = !!text.textContent?.trim() || text.getElementsByTagName("draw:image").length > 0 || text.getElementsByTagName("table:table").length > 0;
     if (hasSource) throw new DocumentError("unreadable-content", "Le contenu de ce document n'a pas pu être lu : il utilise des éléments que Loma Writer ne sait pas importer.");
   }
+  // Sources: those kept in the metadata (all of them), completed by the ones the marks describe.
+  const metaXml = zip.file("meta.xml") ? await zip.file("meta.xml")!.async("string") : "";
+  const userDefined = (name: string) => { try { return Array.from(parseXml(metaXml, "meta.xml").getElementsByTagName("meta:user-defined")).find((e) => e.getAttribute("meta:name") === name)?.textContent ?? null; } catch { return null; } };
+  let fromMeta: Source[] = [];
+  try { fromMeta = cleanSources(JSON.parse(userDefined("LomaSources") ?? "[]")); } catch { /* not ours */ }
+  const merged = cleanSources([...fromMeta, ...(ctx.sources ? [...ctx.sources.values()] : [])]);
+  const styleName = userDefined("LomaCitationStyle");
+  const sourceAttrs = merged.length ? { sources: merged, ...(isCitationStyle(styleName) ? { citationStyle: styleName as CitationStyle } : {}) } : null;
   const docStyles = readDocStyles(styles);
-  return { model: { content: { type: "doc", content: ensureBlocks(blocks) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(docStyles).length ? { styles: docStyles } : {}) }, warnings: [...ctx.warnings] };
+  return { model: { content: { type: "doc", content: tocResolved(ensureBlocks(blocks)), ...(sourceAttrs ? { attrs: sourceAttrs } : {}) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(docStyles).length ? { styles: docStyles } : {}) }, warnings: [...ctx.warnings] };
 }

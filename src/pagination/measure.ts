@@ -39,7 +39,7 @@ export interface AtomRef {
   tdBoxes?: Array<{ left: number; width: number; top: number; bottom: number; bg: string; border: string }>;
 }
 
-const TEXT_BLOCKS = new Set(["paragraph", "heading", "codeBlock"]);
+const TEXT_BLOCKS = new Set(["paragraph", "heading", "codeBlock", "tocEntry", "endnoteItem", "bibEntry"]);
 
 export interface Measured {
   atoms: Atom[];
@@ -50,7 +50,7 @@ export interface Measured {
  * Measures the natural layout (page-break spacers hidden by the caller) as atoms.
  * `origin` is the top of the content flow in client px and `scale` the current zoom.
  */
-export function collectAtoms(view: EditorView, origin: number, scale: number, columnSections: boolean[] = []): Measured {
+export function collectAtoms(view: EditorView, origin: number, scale: number, columnSections: boolean[] = [], noteHeight?: (text: string, n: number) => number): Measured {
   const atoms: Atom[] = [];
   const refs: AtomRef[] = [];
 
@@ -133,6 +133,28 @@ export function collectAtoms(view: EditorView, origin: number, scale: number, co
       if (kind === "text" || (kind === "row" && columnsHere && !ref.groupRows)) {
         let cache: LineBox[] | null = null;
         atom.lines = () => (cache ??= multi ? measureFlows(view, ref, origin, scale) : measureLines(view, ref, origin, scale));
+      }
+      // Footnotes anchored in the atom take room at the bottom of the page its line is on.
+      const anchors: Array<{ pos: number; h: number }> = [];
+      if (noteHeight && kind !== "section" && kind !== "break") node.descendants((child, off) => {
+        if (child.type.name === "footnote" && child.attrs.kind === "foot") anchors.push({ pos: pos + 1 + off, h: noteHeight(String(child.attrs.text ?? ""), +child.attrs.n || 1) });
+        return true;
+      });
+      if (anchors.length) {
+        if (atom.lines) {
+          const heights = () => {
+            const lines = atom.lines!();
+            const starts = ref.lineStarts;
+            const out = new Array<number>(lines.length).fill(0);
+            for (const a of anchors) {
+              let at = 0;
+              for (let k = 0; k < starts.length && k < lines.length; k++) if (starts[k] <= a.pos) at = k;
+              out[at] += a.h;
+            }
+            return out;
+          };
+          atom.noteHeights = heights;
+        } else atom.noteTotal = anchors.reduce((s, a) => s + a.h, 0);
       }
       atoms.push(atom);
       refs.push(ref);

@@ -5,6 +5,9 @@ import { builtinStyle, cleanStyles, STYLE_IDS, type DocStyles, type StyleDef as 
 import { bulletFromChar, numberFromFormat } from "./listFormats";
 import JSZip from "jszip";
 import { pageFromDimensions } from "./page";
+import { readSourcesXml } from "./docxBib";
+import type { CitationStyle, Source } from "../../editor/references/sources";
+import { resolveTocTargets, type JsonNode } from "../../editor/references/tocBuild";
 import { MAX_COLUMNS } from "../../state/page";
 import { mathmlOrOmmlLatex } from "./mathImport";
 import { ListBuilder, ensureBlocks, hasVisibleContent, heading, mergeText, paragraph, splitEquations, textNode, type PM, type RunProps } from "./pm";
@@ -50,6 +53,20 @@ interface Ctx {
   docFont?: string | null;
   /** Section breaks to emit after the paragraphs that end a section (body only); consumed in order. */
   sectionNodes?: PM[];
+  /** The text of the footnotes and endnotes of the file, by id. */
+  notes?: { foot: Map<string, string>; end: Map<string, string> };
+}
+
+/** The notes of `footnotes.xml` / `endnotes.xml`: their text (the paragraphs joined by a space, without the reference mark). */
+function readNotes(xml: string | null, tag: "w:footnote" | "w:endnote"): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!xml) return out;
+  for (const n of Array.from(parseXml(xml, "notes.xml").getElementsByTagName(tag))) {
+    if (n.getAttribute("w:type") && n.getAttribute("w:type") !== "normal") continue;
+    const text = Array.from(n.getElementsByTagName("w:p")).map((p) => Array.from(p.getElementsByTagName("w:t")).map((t) => t.textContent ?? "").join("")).join(" ").replace(/\s+/g, " ").trim();
+    out.set(n.getAttribute("w:id") ?? "", text);
+  }
+  return out;
 }
 
 const on = (el: Element | null): boolean => {
@@ -436,7 +453,20 @@ interface FieldState {
   instr: string;
   /** The field result is replaced by a node, so its text is skipped. */
   skip: boolean;
+  /** The numbering field (SEQ) being read: its label, and the text of its result. */
+  seq?: { label: string; result: string };
+  /** The citation field being read. */
+  cite?: { tag: string; page: string };
 }
+
+/** `SEQ Figure \* ARABIC` : the label of a numbering field. */
+/** `CITATION Dupont2020 \l 1036 \p 12` : the tag of a citation field and its page. */
+function citationField(instr: string): { tag: string; page: string } | null {
+  const m = /^\s*CITATION\s+("?)([^"\s\\]+)\1/i.exec(instr);
+  return m ? { tag: m[2], page: /\\p\s+([^\s\\]+)/i.exec(instr)?.[1] ?? "" } : null;
+}
+
+const seqLabel = (instr: string): string | null => /^\s*SEQ\s+("?)([^"\s\\]+)\1/i.exec(instr)?.[2] ?? null;
 
 const pageFieldKind = (instr: string): "page" | "pages" | null => (/NUMPAGES/i.test(instr) ? "pages" : /\bPAGE\b/i.test(instr) ? "page" : null);
 
@@ -450,19 +480,28 @@ function convertRuns(ctx: Ctx, parent: Element, base: RunProps, out: PM[], fs: F
         const merged = rs ? merge(merge({}, readRun(ctx.styles.get(rs)?.rPr ?? null)), props) : props;
         for (const c of kids(node)) {
           switch (c.nodeName) {
-            case "w:fldChar":
-              if (ctx.fields) {
-                const t = c.getAttribute("w:fldCharType");
-                if (t === "begin") { fs.state = "instr"; fs.instr = ""; fs.skip = false; }
-                else if (t === "separate") {
-                  const kind = pageFieldKind(fs.instr);
-                  if (kind) { out.push({ type: "pageField", attrs: { kind } }); fs.skip = true; }
-                  fs.state = "result";
-                } else if (t === "end") { fs.state = null; fs.skip = false; }
+            case "w:fldChar": {
+              const t = c.getAttribute("w:fldCharType");
+              if (t === "begin") { fs.state = "instr"; fs.instr = ""; fs.skip = false; fs.seq = undefined; fs.cite = undefined; }
+              else if (t === "separate") {
+                const kind = ctx.fields ? pageFieldKind(fs.instr) : null;
+                const label = seqLabel(fs.instr);
+                if (kind) { out.push({ type: "pageField", attrs: { kind } }); fs.skip = true; }
+                else if (label) { fs.seq = { label, result: "" }; fs.skip = true; }
+                else if (citationField(fs.instr)) { fs.cite = citationField(fs.instr)!; fs.skip = true; }
+                fs.state = "result";
+              } else if (t === "end") {
+                if (fs.seq) out.push({ type: "seqField", attrs: { label: fs.seq.label, n: Math.max(1, parseInt(fs.seq.result, 10) || 1) } });
+                if (fs.cite) out.push({ type: "citation", attrs: { tag: fs.cite.tag, page: fs.cite.page, text: "" } });
+                fs.state = null; fs.skip = false; fs.seq = undefined; fs.cite = undefined;
               }
               break;
-            case "w:instrText": if (ctx.fields && fs.state === "instr") fs.instr += c.textContent ?? ""; break;
-            case "w:t": if (c.textContent && !(fs.skip && fs.state === "result") && fs.state !== "instr") out.push(textNode(c.textContent, merged)); break;
+            }
+            case "w:instrText": if (fs.state === "instr") fs.instr += c.textContent ?? ""; break;
+            case "w:t":
+              if (fs.skip && fs.state === "result" && fs.seq) fs.seq.result += c.textContent ?? "";
+              else if (c.textContent && !(fs.skip && fs.state === "result") && fs.state !== "instr") out.push(textNode(c.textContent, merged));
+              break;
             case "w:tab": out.push(textNode("\t", merged)); break;
             case "w:noBreakHyphen": out.push(textNode("-", merged)); break;
             case "w:br":
@@ -481,7 +520,13 @@ function convertRuns(ctx: Ctx, parent: Element, base: RunProps, out: PM[], fs: F
               break;
             }
             case "w:pict": ctx.warnings.add("Formes, zones de texte ou objets incorporés : ignorés."); break;
-            case "w:footnoteReference": case "w:endnoteReference": ctx.warnings.add("Notes de bas de page et de fin : non prises en charge, ignorées."); break;
+            case "w:footnoteReference": case "w:endnoteReference": {
+              const kind = c.nodeName === "w:endnoteReference" ? "end" : "foot";
+              const text = ctx.notes?.[kind].get(c.getAttribute("w:id") ?? "");
+              if (text !== undefined) out.push({ type: "footnote", attrs: { kind, text: text.slice(0, 2000), n: 1 } });
+              else ctx.warnings.add("Notes de bas de page ou de fin introuvables dans le fichier : ignorées.");
+              break;
+            }
             case "w:commentReference": ctx.warnings.add("Commentaires : non pris en charge, ignorés."); break;
           }
         }
@@ -496,8 +541,14 @@ function convertRuns(ctx: Ctx, parent: Element, base: RunProps, out: PM[], fs: F
       }
       case "w:bookmarkStart": { const name = node.getAttribute("w:name"); if (name && name !== "_GoBack") out.push({ type: "bookmark", attrs: { name } }); break; }
       case "w:fldSimple": {
-        const kind = ctx.fields ? pageFieldKind(node.getAttribute("w:instr") ?? "") : null;
-        if (kind) out.push({ type: "pageField", attrs: { kind } }); else convertRuns(ctx, node, base, out, fs);
+        const instr = node.getAttribute("w:instr") ?? "";
+        const kind = ctx.fields ? pageFieldKind(instr) : null;
+        const label = seqLabel(instr);
+        const cite = citationField(instr);
+        if (kind) out.push({ type: "pageField", attrs: { kind } });
+        else if (cite) out.push({ type: "citation", attrs: { tag: cite.tag, page: cite.page, text: "" } });
+        else if (label) out.push({ type: "seqField", attrs: { label, n: Math.max(1, parseInt(node.textContent ?? "", 10) || 1) } });
+        else convertRuns(ctx, node, base, out, fs);
         break;
       }
       case "w:ins": case "w:smartTag": case "w:sdt": case "w:sdtContent": convertRuns(ctx, node, base, out, fs); break;
@@ -658,9 +709,43 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
   let code: PM | null = null;
   const flush = () => { quote = null; code = null; };
 
+  // A table of contents written as a field (its paragraphs follow one another until the field ends) or as a content control.
+  let toc: { lines: PM[]; depth: number; title: string; instr: string } | null = null;
+  const closeToc = () => {
+    if (!toc) return;
+    // a BIBLIOGRAPHY field: the entries are written again from the sources
+    out.push(/^BIBLIOGRAPHY/i.test(toc.instr) ? { type: "bibliography", attrs: { title: toc.title === DEFAULT_TOC_TITLE ? "Bibliographie" : toc.title, mode: "cited" }, content: [] } : tocNode(toc.lines, toc.title, toc.instr));
+    toc = null;
+  };
+  const startToc = (instr: string) => {
+    flush(); lists.close();
+    // The title ("Table des matières") is the paragraph before the field, in the style TOC Heading.
+    let title = "";
+    const last = out[out.length - 1];
+    if (last && last.type === "paragraph" && tocHeadingBefore) { title = textOf(last).trim(); out.pop(); }
+    toc = { lines: [], depth: 0, title: title || DEFAULT_TOC_TITLE, instr };
+  };
+  let tocHeadingBefore = false;
+
   const visit = (el: Element) => {
+    if (toc && el.nodeName === "w:p") {
+      toc.lines.push(tocLineFrom(ctx, el));
+      toc.depth += fieldDepthDelta(el);
+      if (toc.depth <= 0) closeToc();
+      return;
+    }
     switch (el.nodeName) {
       case "w:p": {
+        const instr = tocInstruction(el);
+        if (instr !== null && container.nodeName === "w:body") {
+          const prev = el.previousElementSibling;
+          tocHeadingBefore = !!prev && /^toc\s*heading$/i.test(styleName(ctx, attr(child(child(prev, "w:pPr") ?? prev, "w:pStyle"), "w:val")));
+          startToc(instr);
+          toc!.lines.push(tocLineFrom(ctx, el));
+          toc!.depth += fieldDepthDelta(el);
+          if (toc!.depth <= 0) closeToc();
+          return;
+        }
         // The empty paragraph Word (and the docx library) use only to carry a section's properties is not content.
         const sect = container.nodeName === "w:body" && !!child(child(el, "w:pPr") ?? el, "w:sectPr");
         const carrier = sect && !el.textContent?.trim() && !["w:drawing", "w:pict", "w:br", "m:oMath", "w:object"].some((t) => el.getElementsByTagName(t).length);
@@ -670,13 +755,30 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
         return;
       }
       case "w:tbl": flush(); lists.close(); out.push(convertTable(ctx, el)); return;
-      case "w:sdt": case "w:sdtContent": case "w:customXml": kids(el).forEach(visit); return;
+      case "w:sdt": {
+        // A content control holding a table of contents (Word's built-in galleries).
+        const gallery = attr(first(el, "w:docPartGallery"), "w:val") ?? "";
+        if (/table of contents|table des mati/i.test(gallery) && container.nodeName === "w:body") {
+          const content = child(el, "w:sdtContent");
+          const paras = content ? kids(content).filter((k) => k.nodeName === "w:p") : [];
+          const head = paras[0] && /toc\s*heading/i.test(styleName(ctx, attr(child(child(paras[0], "w:pPr") ?? paras[0], "w:pStyle"), "w:val")));
+          const title = head ? textOf(convertParagraph(ctx, paras[0]).nodes[0] ?? {}).trim() : "";
+          const entries = paras.slice(head ? 1 : 0).filter((p) => (p.textContent ?? "").trim());
+          flush(); lists.close();
+          out.push(tocNode(entries.map((p) => tocLineFrom(ctx, p)), title || DEFAULT_TOC_TITLE, tocInstruction(paras[head ? 1 : 0] ?? el) ?? ""));
+          return;
+        }
+        kids(el).forEach(visit);
+        return;
+      }
+      case "w:sdtContent": case "w:customXml": kids(el).forEach(visit); return;
     }
   };
   const paragraph = (el: Element) => {
     {
       {
         const { nodes, kind, list } = convertParagraph(ctx, el);
+        for (const n of nodes) markCaption(n);
         if (nodes.length !== 1 || nodes[0].type === "pageBreak" || nodes[0].type === "columnBreak") { flush(); lists.close(); out.push(...nodes); return; }
         const node = nodes[0];
         if (list) { flush(); lists.add(list.type, list.level, [node], list.listType); return; }
@@ -696,7 +798,68 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
     }
   };
   kids(container).forEach(visit);
+  closeToc();
   return out;
+}
+
+/** A paragraph holding a numbering field (SEQ) is a caption of that label. */
+function markCaption(n: PM): void {
+  if (n.type !== "paragraph") return;
+  const seq = (n.content ?? []).find((c) => c.type === "seqField");
+  if (seq) n.attrs = { ...(n.attrs ?? {}), caption: String(seq.attrs?.label ?? "Figure") };
+}
+
+const DEFAULT_TOC_TITLE = "Table des matières";
+const tocResolved = (blocks: PM[]): PM[] => { const doc = { type: "doc", content: blocks } as JsonNode; resolveTocTargets(doc); return (doc.content ?? []) as PM[]; };
+const textOf = (n: PM): string => (n.text ?? "") + (n.content ?? []).map(textOf).join("");
+const styleName = (ctx: Ctx, id: string | null) => (styleChain(ctx, id).at(-1)?.name ?? id ?? "").toLowerCase();
+
+/** The instruction of a TOC (or BIBLIOGRAPHY) field starting in this paragraph, or null. */
+function tocInstruction(p: Element): string | null {
+  for (const t of Array.from(p.getElementsByTagName("w:instrText"))) {
+    const v = (t.textContent ?? "").trim();
+    if (/^(TOC|BIBLIOGRAPHY)\b/i.test(v)) return v;
+  }
+  return null;
+}
+
+/** begin minus end field characters of a paragraph: the TOC field is closed when the total comes back to zero. */
+function fieldDepthDelta(p: Element): number {
+  let d = 0;
+  for (const f of Array.from(p.getElementsByTagName("w:fldChar"))) {
+    const t = f.getAttribute("w:fldCharType");
+    if (t === "begin") d++; else if (t === "end") d--;
+  }
+  return d;
+}
+
+/** One line of a table of contents: its level (style TOC 1-3), its text and the page number after the last tab. */
+function tocLineFrom(ctx: Ctx, p: Element): PM {
+  const pStyle = attr(child(child(p, "w:pPr") ?? p, "w:pStyle"), "w:val");
+  const lvl = /^toc\s*(\d)/i.exec(pStyle ?? "") ?? /^toc\s*(\d)/i.exec(styleName(ctx, pStyle)) ?? /^table des mati[^\d]*(\d)/i.exec(styleName(ctx, pStyle));
+  let text = "";
+  const walk = (n: Element) => {
+    for (const c of kids(n)) {
+      if (c.nodeName === "w:instrText" || c.nodeName === "w:delText") continue;
+      if (c.nodeName === "w:t") text += c.textContent ?? "";
+      else if (c.nodeName === "w:tab") text += "\t";
+      else if (c.nodeName === "w:br") text += " ";
+      else walk(c);
+    }
+  };
+  walk(p);
+  const at = text.lastIndexOf("\t");
+  const title = (at >= 0 ? text.slice(0, at) : text).replace(/\t/g, " ").trim();
+  const page = at >= 0 ? text.slice(at + 1).trim() : "";
+  return { type: "tocEntry", attrs: { level: Math.min(3, Math.max(1, lvl ? +lvl[1] : 1)), target: null, page: page.slice(0, 12) }, content: title ? [{ type: "text", text: title }] : [] };
+}
+
+/** A table of contents node from its lines (and the field instruction: headings, or the captions of a label). */
+function tocNode(lines: PM[], title: string, instr: string): PM {
+  const caption = /\\c\s+"([^"]+)"/i.exec(instr);
+  const levelsOf = /\\o\s+"1-(\d)"/i.exec(instr);
+  const levels = Math.min(3, Math.max(...lines.map((l) => +(l.attrs?.level ?? 1)), levelsOf ? +levelsOf[1] : 1));
+  return { type: "tableOfContents", attrs: { levels, kind: caption ? "captions" : "headings", title, label: caption ? caption[1] : null }, content: lines };
 }
 
 async function readHeadersFooters(ctx: Ctx, sectPr: Element, text: (path: string) => Promise<string | null>): Promise<HeaderFooterSettings | undefined> {
@@ -781,7 +944,15 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
     rels: parseRels(await text("word/_rels/document.xml.rels")),
     warnings,
     images,
+    notes: { foot: readNotes(await text("word/footnotes.xml"), "w:footnote"), end: readNotes(await text("word/endnotes.xml"), "w:endnote") },
   };
+
+  // The sources of the document (Word keeps them in a customXml part).
+  let bib: { sources: Source[]; style: CitationStyle | null } | null = null;
+  for (const path of Object.keys(zip.files).filter((f) => /^customXml\/item\d+\.xml$/.test(f))) {
+    const read = readSourcesXml((await zip.file(path)?.async("string")) ?? "");
+    if (read && read.sources.length) { bib = read; break; }
+  }
 
   const doc = parseXml(docXml, "document.xml");
   const body = first(doc, "w:body");
@@ -848,9 +1019,7 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   resolvePlacements(seg, infos[Math.min(si, infos.length - 1)].w, infos[Math.min(si, infos.length - 1)].margins);
 
   const headerFooter = resolved[0] && (resolved[0].header.default || resolved[0].header.first || resolved[0].header.even || resolved[0].footer.default || resolved[0].footer.first || resolved[0].footer.even) ? resolved[0] : undefined;
-  const footnotes = await text("word/footnotes.xml");
-  if (footnotes && Array.from(parseXml(footnotes, "footnotes.xml").getElementsByTagName("w:footnote")).some((f) => !f.getAttribute("w:type") && f.textContent?.trim()))
-    warnings.add("Notes de bas de page : non prises en charge, ignorées.");
+  if ([...(ctx.notes?.foot.values() ?? []), ...(ctx.notes?.end.values() ?? [])].some((t) => t.length > 2000)) warnings.add("Notes : les textes de plus de 2000 caractères sont raccourcis.");
   if (zip.file("word/comments.xml")) warnings.add("Commentaires : non pris en charge, ignorés.");
 
   // Never present an unreadable document as an empty one.
@@ -860,5 +1029,5 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   }
   const styles = readDocStyles(ctx);
   const watermark = await readWatermark(zip);
-  return { model: { content: { type: "doc", content: ensureBlocks(blocks) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(styles).length ? { styles } : {}), ...(watermark ? { watermark } : {}) }, warnings: [...warnings] };
+  return { model: { content: { type: "doc", content: tocResolved(ensureBlocks(blocks)), ...(bib ? { attrs: { sources: bib.sources, ...(bib.style ? { citationStyle: bib.style } : {}) } } : {}) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(styles).length ? { styles } : {}), ...(watermark ? { watermark } : {}) }, warnings: [...warnings] };
 }
