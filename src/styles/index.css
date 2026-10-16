@@ -460,6 +460,7 @@ select {
 
 /* Table of contents: the lines are real paragraphs of the document, drawn with a dotted leader and the page number at the right. */
 .paper .ProseMirror .toc { margin: 0.4em 0 1em; }
+.paper .ProseMirror .toc[data-title=""]::before { display: none; }
 .paper .ProseMirror .toc::before { content: attr(data-title); display: block; margin: 0 0 0.5em; font-size: 16pt; font-weight: 600; color: #1d4ed8; }
 .paper .ProseMirror .toc-entry { display: flex; align-items: baseline; margin: 0 0 0.2em; line-height: 1.4; }
 .paper .ProseMirror .toc-entry::before { content: ""; order: 1; flex: 1 1 1.2em; min-width: 1.2em; margin: 0 0.35em; border-bottom: 1px dotted currentColor; transform: translateY(-0.25em); opacity: 0.7; }

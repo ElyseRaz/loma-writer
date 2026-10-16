@@ -1,4 +1,6 @@
 import { SECTION_BREAK } from "../../editor/Sections";
+import { gridWidths } from "./tableGrid";
+import { ODF_NAME_OF } from "./odfShapes";
 import { sanitizeHeaderFooter, type HeaderFooterSettings } from "../../pagination/headerFooter";
 import { sanitizePage } from "./sanitize";
 import type { PageSetup } from "../../state/types";
@@ -271,7 +273,7 @@ function graphicStyle(ctx: Ctx, a: Record<string, unknown>, box: boolean): strin
   if (box) {
     props = `fo:padding="0.2cm" ${stroke ? 'fo:border="none"' : `fo:border="${(Number(a.strokeWidth) || 1) * 0.75}pt solid ${esc(String(a.stroke))}"`} ${fillNone ? "" : gradient ? `draw:fill="gradient" draw:fill-gradient-name="${gradientName(ctx, gradient)}"` : `fo:background-color="${esc(String(a.fill))}"`}`;
   } else {
-    props = `draw:fill="${fillNone ? "none" : gradient ? "gradient" : "solid"}" ${gradient ? `draw:fill-gradient-name="${gradientName(ctx, gradient)}"` : fillNone ? "" : `draw:fill-color="${esc(String(a.fill))}"`} draw:stroke="${stroke ? "none" : "solid"}" ${stroke ? "" : `svg:stroke-color="${esc(String(a.stroke))}" svg:stroke-width="${sw}cm"`} draw:textarea-vertical-align="middle" draw:textarea-horizontal-align="center" fo:padding-top="0.1cm" fo:padding-bottom="0.1cm" fo:padding-left="0.2cm" fo:padding-right="0.2cm"`;
+    props = `draw:fill="${fillNone ? "none" : gradient ? "gradient" : "solid"}" ${gradient ? `draw:fill-gradient-name="${gradientName(ctx, gradient)}"` : fillNone ? "" : `draw:fill-color="${esc(String(a.fill))}"`} draw:stroke="${stroke ? "none" : "solid"}" ${stroke ? "" : `svg:stroke-color="${esc(String(a.stroke))}" svg:stroke-width="${sw}cm"`} draw:textarea-vertical-align="middle" draw:textarea-horizontal-align="center" fo:wrap-option="wrap" draw:auto-grow-height="false" draw:auto-grow-width="false" fo:padding-top="0.1cm" fo:padding-bottom="0.1cm" fo:padding-left="0.2cm" fo:padding-right="0.2cm"`;
   }
   ctx.graphicStyles.push(`<style:style style:name="${name}" style:family="graphic"><style:graphic-properties ${props} ${wrapAttrs}${place}${shadow}/></style:style>`);
   return name;
@@ -316,7 +318,7 @@ function shapeElement(ctx: Ctx, n: PM, at?: { x: number; y: number }, inheritWra
   ctx.anchored = pending;
   if (box) return `<draw:frame ${common}${positionAttrs(a, x, y)} svg:width="${w}" fo:min-height="${h}">${title}<draw:text-box>${paragraphs}</draw:text-box></draw:frame>`;
   const prst = kind === TEXT_BOX || !isKnownShape(kind) ? "rect" : kind;
-  return `<draw:custom-shape ${common}${positionAttrs(a, x, y)} svg:width="${w}" svg:height="${h}">${title}${paragraphs}<draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="ooxml-${prst}" draw:enhanced-path="M 0 0 L 21600 0 21600 21600 0 21600 0 0 Z N"/></draw:custom-shape>`;
+  return `<draw:custom-shape ${common}${positionAttrs(a, x, y)} svg:width="${w}" svg:height="${h}">${title}${paragraphs}<draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="${ODF_NAME_OF[prst] ?? `ooxml-${prst}`}"${ODF_NAME_OF[prst] ? "" : ' draw:enhanced-path="M 0 0 L 21600 0 21600 21600 0 21600 0 0 Z N"'}/></draw:custom-shape>`;
 }
 
 /** A shape or group: inline ones get their own paragraph, floating ones wait for the next paragraph (their anchor). */
@@ -430,8 +432,9 @@ function table(ctx: Ctx, n: PM): string {
   const leading = headerRows.length && rows.slice(0, headerRows.length).every((r) => headerRows.includes(r)) ? headerRows.length : 0;
   const head = rows.slice(0, leading).map((r, i) => renderRow(r, i)).join("");
   const rest = rows.slice(leading).map((r, i) => renderRow(r, i + leading)).join("");
-  const widths = (rows[0]?.content ?? []).map((c) => (Array.isArray(c.attrs?.colwidth) ? (c.attrs!.colwidth as number[]).reduce((a, b) => a + b, 0) : 0));
-  const known = widths.length === cols && widths.every((w) => w > 0);
+  const grid = gridWidths(rows, cols);
+  const widths = grid ?? [];
+  const known = !!grid;
   if (known) widths.forEach((w, i) => ctx.colStyles.push(`<style:style style:name="${ctx.prefix}TblCol${i + 1}_${id}" style:family="table-column"><style:table-column-properties style:column-width="${pxToCm(w)}cm"/></style:style>`));
   const colDefs = known ? widths.map((_, i) => `<table:table-column table:style-name="${ctx.prefix}TblCol${i + 1}_${id}"/>`).join("") : `<table:table-column table:number-columns-repeated="${cols}"/>`;
   return `<table:table table:name="Table${id}" table:style-name="${place ? `${ctx.prefix}TblP${id}` : "Tbl"}">${colDefs}${leading ? `<table:table-header-rows>${head}</table:table-header-rows>` : ""}${rest}</table:table>`;

@@ -1,4 +1,5 @@
 import { SECTION_BREAK } from "../../editor/Sections";
+import { gridWidths } from "./tableGrid";
 import { sanitizePage } from "./sanitize";
 import { cleanWatermark, type Watermark } from "../../editor/watermark";
 import { cleanLayout } from "../../editor/ParagraphFormat";
@@ -259,10 +260,9 @@ function blocks(ctx: Ctx, nodes: PM[] = [], list: ListCtx = null): Block[] {
 function table(ctx: Ctx, n: PM): Table {
   const look = cleanLook(n.attrs?.look);
   const cols = Math.max(1, ...((n.content ?? []).map((r) => (r.content ?? []).reduce((s, c) => s + +(c.attrs?.colspan ?? 1), 0))));
-  const first = n.content?.[0]?.content ?? [];
-  const known = first.length === cols && first.every((c) => Array.isArray(c.attrs?.colwidth));
+  const grid = gridWidths(n.content ?? [], cols);
   const place = cleanPlace(n.attrs?.place);
-  const widths = known ? first.map((c) => (c.attrs!.colwidth as number[]).reduce((a, b) => a + b, 0) * TWIPS_PER_PX) : Array(cols).fill(Math.floor((place ? place.w * TWIPS_PER_PX : 9000) / cols));
+  const widths = grid ? grid.map((w) => w * TWIPS_PER_PX) : Array(cols).fill(Math.floor((place ? place.w * TWIPS_PER_PX : 9000) / cols));
   return new Table({
     width: { size: widths.reduce((a, b) => a + b, 0), type: WidthType.DXA },
     columnWidths: widths,

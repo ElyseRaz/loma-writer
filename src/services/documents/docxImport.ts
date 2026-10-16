@@ -1,4 +1,4 @@
-import type { PageNumberFormat } from "../../pagination/pageNumber";
+import { formatPageNumber, type PageNumberFormat } from "../../pagination/pageNumber";
 import { cleanWatermark, type Watermark } from "../../editor/watermark";
 import type { ParagraphLayout } from "../../editor/ParagraphFormat";
 import { builtinStyle, cleanStyles, STYLE_IDS, type DocStyles, type StyleDef as EditedStyle, type StyleId } from "../../editor/docStyles";
@@ -44,7 +44,9 @@ interface Ctx {
   zip: JSZip;
   styles: Map<string, StyleDef>;
   /** numId -> bullet or ordered, from numbering.xml */
-  numbering: Map<string, { type: "bulletList" | "orderedList"; listType: string | null }>;
+  numbering: Map<string, NumberingDef>;
+  /** Counters of the numbered headings, by abstract numbering (they go on from one heading to the next). */
+  headingCounters: Map<string, number[]>;
   rels: Map<string, { target: string; external: boolean }>;
   warnings: Set<string>;
   /** True while reading a header/footer: page-number fields become nodes. */
@@ -153,24 +155,71 @@ function parseStyles(zip: JSZip, xml: string | null): Map<string, StyleDef> {
   return map;
 }
 
-function parseNumbering(xml: string | null): Map<string, { type: "bulletList" | "orderedList"; listType: string | null }> {
-  const out = new Map<string, { type: "bulletList" | "orderedList"; listType: string | null }>();
+/** One level of a numbering definition: how its number is written. */
+interface NumberingLevel { format: PageNumberFormat | "none" | "bullet"; text: string; start: number; suffix: string }
+interface NumberingDef { type: "bulletList" | "orderedList"; listType: string | null; abstract?: string; levels?: Array<NumberingLevel | undefined>; starts?: Map<number, number> }
+
+const DOCX_FORMATS: Record<string, PageNumberFormat | "none" | "bullet"> = { decimal: "decimal", upperRoman: "upperRoman", lowerRoman: "lowerRoman", upperLetter: "upperLetter", lowerLetter: "lowerLetter", none: "none", bullet: "bullet" };
+
+function parseNumbering(xml: string | null): Map<string, NumberingDef> {
+  const out = new Map<string, NumberingDef>();
   if (!xml) return out;
   const doc = parseXml(xml, "numbering.xml");
-  const abstracts = new Map<string, { type: "bulletList" | "orderedList"; listType: string | null }>();
+  const abstracts = new Map<string, NumberingDef>();
   for (const a of Array.from(doc.getElementsByTagName("w:abstractNum"))) {
     const lvl0 = kids(a).find((k) => k.nodeName === "w:lvl");
     const fmt = attr(lvl0 ? child(lvl0, "w:numFmt") : null, "w:val");
     const bullet = fmt === "bullet" || fmt === "none";
     abstracts.set(a.getAttribute("w:abstractNumId") ?? "", bullet
-      ? { type: "bulletList", listType: bulletFromChar(attr(lvl0 ? child(lvl0, "w:lvlText") : null, "w:val")) }
-      : { type: "orderedList", listType: numberFromFormat(fmt, "docx") });
+      ? { type: "bulletList", listType: bulletFromChar(attr(lvl0 ? child(lvl0, "w:lvlText") : null, "w:val")), abstract: a.getAttribute("w:abstractNumId") ?? "", levels: levelsOf(a) }
+      : { type: "orderedList", listType: numberFromFormat(fmt, "docx"), abstract: a.getAttribute("w:abstractNumId") ?? "", levels: levelsOf(a) });
   }
   for (const n of Array.from(doc.getElementsByTagName("w:num"))) {
     const abs = attr(child(n, "w:abstractNumId"), "w:val") ?? "";
-    out.set(n.getAttribute("w:numId") ?? "", abstracts.get(abs) ?? { type: "bulletList", listType: null });
+    const starts = new Map<number, number>();
+    for (const o of kids(n).filter((k) => k.nodeName === "w:lvlOverride")) {
+      const st = attr(child(o, "w:startOverride"), "w:val");
+      if (st !== null && Number.isFinite(+st)) starts.set(+(o.getAttribute("w:ilvl") ?? 0), +st);
+    }
+    out.set(n.getAttribute("w:numId") ?? "", { ...(abstracts.get(abs) ?? { type: "bulletList", listType: null }), ...(starts.size ? { starts } : {}) });
   }
   return out;
+}
+
+function levelsOf(abstract: Element): Array<NumberingLevel | undefined> {
+  const levels: Array<NumberingLevel | undefined> = [];
+  for (const l of kids(abstract).filter((k) => k.nodeName === "w:lvl")) {
+    const i = +(l.getAttribute("w:ilvl") ?? 0);
+    const suff = attr(child(l, "w:suff"), "w:val");
+    levels[i] = {
+      format: DOCX_FORMATS[attr(child(l, "w:numFmt"), "w:val") ?? "decimal"] ?? "decimal",
+      text: attr(child(l, "w:lvlText"), "w:val") ?? `%${i + 1}`,
+      start: +(attr(child(l, "w:start"), "w:val") ?? 1) || 1,
+      suffix: suff === "nothing" ? "" : " ",
+    };
+  }
+  return levels;
+}
+
+/** The number a numbered heading shows ("Chapitre 1 :", "1.2"), once the counters of its numbering are updated. */
+function headingNumber(ctx: Ctx, numId: string, ilvl: number): string {
+  const def = ctx.numbering.get(numId);
+  const levels = def?.levels;
+  if (!def || !levels?.[ilvl]) return "";
+  const key = def.abstract ?? numId;
+  const counters = ctx.headingCounters.get(key) ?? [];
+  const startOf = (l: number) => def.starts?.get(l) ?? levels[l]?.start ?? 1;
+  counters[ilvl] = counters[ilvl] === undefined ? startOf(ilvl) : counters[ilvl] + 1;
+  for (let k = ilvl + 1; k < counters.length; k++) counters[k] = startOf(k) - 1; // deeper levels start again
+  ctx.headingCounters.set(key, counters);
+  const lv = levels[ilvl]!;
+  if (lv.format === "none" || lv.format === "bullet") return "";
+  const label = lv.text.replace(/%(\d)/g, (_m, n: string) => {
+    const l = levels[+n - 1];
+    const v = counters[+n - 1] ?? startOf(+n - 1);
+    return l && l.format !== "none" && l.format !== "bullet" ? formatPageNumber(v, l.format) : "";
+  }).trim();
+  return label ? `${label}${lv.suffix}` : "";
 }
 
 function parseRels(xml: string | null): Map<string, { target: string; external: boolean }> {
@@ -193,7 +242,7 @@ function styleChain(ctx: Ctx, id: string | null): StyleDef[] {
 }
 
 /** The editable styles (Normal, headings, quote, code) as defined in the file, minus what equals the built-in look. */
-function readDocStyles(ctx: Ctx): DocStyles {
+function readDocStyles(ctx: Ctx, own: boolean): DocStyles {
   const ids: Record<StyleId, RegExp> = {
     normal: /^(normal|standard|par défaut)$/, h1: /^(?:heading|titre|überschrift)\s*1$/, h2: /^(?:heading|titre|überschrift)\s*2$/, h3: /^(?:heading|titre|überschrift)\s*3$/,
     h4: /^(?:heading|titre|überschrift)\s*4$/, h5: /^(?:heading|titre|überschrift)\s*5$/, h6: /^(?:heading|titre|überschrift)\s*6$/,
@@ -215,13 +264,12 @@ function readDocStyles(ctx: Ctx): DocStyles {
     const raw: EditedStyle = {
       ...(id !== "normal" && run.font && run.font !== ctx.docFont && !(id === "code" && /mono|courier|consolas/i.test(run.font)) ? { fontFamily: run.font } : {}),
       ...(id !== "normal" && run.sizePt ? { sizePt: run.sizePt } : {}),
-      ...(run.color ? { color: run.color } : {}),
-      ...(run.bold !== undefined ? { bold: run.bold } : {}),
-      ...(run.italic !== undefined ? { italic: run.italic } : {}),
+      // what the file does not say is the file's default (black, regular, no spacing), not Loma Writer's own look
+      ...(own ? { ...(run.color ? { color: run.color } : {}), ...(run.bold !== undefined ? { bold: run.bold } : {}), ...(run.italic !== undefined ? { italic: run.italic } : {}) } : { color: run.color ?? "#000000", bold: run.bold ?? false, italic: run.italic ?? false }),
       ...(jc === "center" || jc === "right" ? { align: jc } : jc === "both" ? { align: "justify" as const } : {}),
-      ...(before !== null ? { spaceBefore: +before / 20 } : {}),
-      ...(after !== null ? { spaceAfter: +after / 20 } : {}),
-      ...(line && lineAuto && +line > 0 ? { lineHeight: +line / 240 } : {}),
+      ...(before !== null || !own ? { spaceBefore: before !== null ? +before / 20 : 0 } : {}),
+      ...(after !== null || !own ? { spaceAfter: after !== null ? +after / 20 : 0 } : {}),
+      ...(line && lineAuto && +line > 0 ? { lineHeight: +line / 240 } : own ? {} : { lineHeight: 1 }),
     };
     const base = builtinStyle(id, { fontFamily: "", sizePt: 11 }) as Record<string, unknown>;
     const diff = Object.fromEntries(Object.entries(raw).filter(([k, v]) => k === "fontFamily" || (typeof v === "number" ? Math.abs(v - (base[k] as number)) > 0.25 : v !== base[k])));
@@ -660,6 +708,14 @@ function convertParagraph(ctx: Ctx, p: Element): ParaInfo {
     const numId = attr(child(numPr, "w:numId"), "w:val");
     if (numId && numId !== "0") { const nm = ctx.numbering.get(numId); list = { type: nm?.type ?? "bulletList", listType: nm?.listType ?? null, level: +(attr(child(numPr, "w:ilvl"), "w:val") ?? 0) }; }
   }
+  // A numbered heading is a heading with its number written in front (the numbering of headings is not a list of ours).
+  if (numPr && kind.kind === "heading") {
+    const numId = attr(child(numPr, "w:numId"), "w:val");
+    if (numId && numId !== "0") {
+      const label = headingNumber(ctx, numId, +(attr(child(numPr, "w:ilvl"), "w:val") ?? 0));
+      if (label) content.unshift({ type: "text", text: label });
+    }
+  }
   if (!list && kind.kind === "normal") {
     const name = styleChain(ctx, styleId).at(-1)?.name ?? "";
     if (/^list bullet/.test(name)) list = { type: "bulletList", level: 0 };
@@ -773,7 +829,7 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
   const closeToc = () => {
     if (!toc) return;
     // a BIBLIOGRAPHY field: the entries are written again from the sources
-    out.push(/^BIBLIOGRAPHY/i.test(toc.instr) ? { type: "bibliography", attrs: { title: toc.title === DEFAULT_TOC_TITLE ? "Bibliographie" : toc.title, mode: "cited" }, content: [] } : tocNode(toc.lines, toc.title, toc.instr));
+    out.push(/^BIBLIOGRAPHY/i.test(toc.instr) ? { type: "bibliography", attrs: { title: !toc.title || toc.title === DEFAULT_TOC_TITLE ? "Bibliographie" : toc.title, mode: "cited" }, content: [] } : tocNode(toc.lines, toc.title, toc.instr));
     toc = null;
   };
   const startToc = (instr: string) => {
@@ -782,7 +838,7 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
     let title = "";
     const last = out[out.length - 1];
     if (last && last.type === "paragraph" && tocHeadingBefore) { title = textOf(last).trim(); out.pop(); }
-    toc = { lines: [], depth: 0, title: title || DEFAULT_TOC_TITLE, instr };
+    toc = { lines: [], depth: 0, title, instr };
   };
   let tocHeadingBefore = false;
 
@@ -824,7 +880,7 @@ function convertBlocks(ctx: Ctx, container: Element): PM[] {
           const title = head ? textOf(convertParagraph(ctx, paras[0]).nodes[0] ?? {}).trim() : "";
           const entries = paras.slice(head ? 1 : 0).filter((p) => (p.textContent ?? "").trim());
           flush(); lists.close();
-          out.push(tocNode(entries.map((p) => tocLineFrom(ctx, p)), title || DEFAULT_TOC_TITLE, tocInstruction(paras[head ? 1 : 0] ?? el) ?? ""));
+          out.push(tocNode(entries.map((p) => tocLineFrom(ctx, p)), title, tocInstruction(paras[head ? 1 : 0] ?? el) ?? ""));
           return;
         }
         kids(el).forEach(visit);
@@ -1001,6 +1057,7 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
     docFont: stylesXml ? (() => { const f = first(parseXml(stylesXml, "styles.xml"), "w:rPrDefault"); return f ? readRun(child(f, "w:rPr")).font ?? null : null; })() : null,
     docPPr: stylesXml ? first(parseXml(stylesXml, "styles.xml"), "w:pPrDefault") : null,
     numbering: parseNumbering(await text("word/numbering.xml")),
+    headingCounters: new Map(),
     rels: parseRels(await text("word/_rels/document.xml.rels")),
     warnings,
     images,
@@ -1087,7 +1144,7 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
     const sourceHasContent = Array.from(doc.getElementsByTagName("w:t")).some((t) => t.textContent?.trim()) || doc.getElementsByTagName("w:drawing").length > 0 || doc.getElementsByTagName("w:tbl").length > 0;
     if (sourceHasContent) throw new DocumentError("unreadable-content", "Le contenu de ce document n'a pas pu être lu : il utilise des éléments que Loma Writer ne sait pas importer.");
   }
-  const styles = readDocStyles(ctx);
+  const styles = readDocStyles(ctx, /<dc:creator>\s*Loma Writer/.test((await zip.file("docProps/core.xml")?.async("string")) ?? ""));
   const watermark = await readWatermark(zip);
   return { model: { content: { type: "doc", content: tocResolved(ensureBlocks(blocks)), ...(bib || noteOptions ? { attrs: { ...(bib ? { sources: bib.sources, ...(bib.style ? { citationStyle: bib.style } : {}) } : {}), ...(noteOptions ? { notes: noteOptions } : {}) } } : {}) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(styles).length ? { styles } : {}), ...(watermark ? { watermark } : {}) }, warnings: [...warnings] };
 }

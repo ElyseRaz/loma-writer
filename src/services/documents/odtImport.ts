@@ -1,6 +1,7 @@
 import type { ParagraphLayout } from "../../editor/ParagraphFormat";
 import { builtinStyle, cleanStyles, STYLE_IDS, type DocStyles, type StyleId } from "../../editor/docStyles";
 import { bulletFromChar, numberFromFormat } from "./listFormats";
+import { ODF_SHAPES } from "./odfShapes";
 import JSZip from "jszip";
 import { pageFromDimensions } from "./page";
 import { cleanLabel } from "../../editor/references/Captions";
@@ -16,7 +17,7 @@ import { byLocalName } from "../math/mathml";
 import { DEFAULT_SHAPE_STYLE, isKnownShape, NONE, TEXT_BOX } from "../../editor/shapes/catalog";
 import type { Gradient, Shadow } from "../../editor/shapes/types";
 import { sanitizeHeaderFooter, type HeaderFooterSettings } from "../../pagination/headerFooter";
-import type { PageNumberFormat } from "../../pagination/pageNumber";
+import { formatPageNumber, type PageNumberFormat } from "../../pagination/pageNumber";
 import type { ColumnsSpec, PageSetup } from "../../state/types";
 import { DEFAULT_COLUMN_GAP_CM, MAX_COLUMNS } from "../../state/page";
 
@@ -49,11 +50,29 @@ interface Style {
   automatic: boolean;
 }
 
+interface ListLevel {
+  format: PageNumberFormat | "none";
+  prefix: string;
+  suffix: string;
+  displayLevels: number;
+  /** LibreOffice's full format, e.g. "Chapitre %2%:" (%N% is the counter of level N). */
+  template: string | null;
+  start: number;
+  /** What follows the number: nothing, a space or a tab. */
+  followed: string;
+}
+
+const ODF_FORMATS: Record<string, PageNumberFormat | "none"> = { "1": "decimal", I: "upperRoman", i: "lowerRoman", A: "upperLetter", a: "lowerLetter", "": "none" };
+
 interface Ctx {
   styles: Map<string, Style>;
   listKinds: Map<string, Array<"bulletList" | "orderedList">>;
   /** Marker style (ours) of each level of a list style; null = default. */
   listTypes: Map<string, Array<string | null>>;
+  /** Numbering of each level of a list style (headings numbered by a list: "Chapitre 1 :", "1.1."). */
+  listLevels: Map<string, Array<ListLevel | undefined>>;
+  /** Counters of the headings numbered by each list style (they go on from one list to the next). */
+  listCounters: Map<string, number[]>;
   columns: Map<string, number>; // table-column style -> width px
   images: Map<string, string>;
   /** "Object 1" -> LaTeX of the formula stored in that embedded object. */
@@ -232,13 +251,29 @@ function collectStyles(docs: Document[], ctx: Ctx) {
         types[i] = l.nodeName === "text:list-level-style-number" ? numberFromFormat(l.getAttribute("style:num-format"), "odf") : bulletFromChar(l.getAttribute("text:bullet-char"));
       }
       ctx.listTypes.set(ls.getAttribute("style:name") ?? "", types);
+      const lv: Array<ListLevel | undefined> = [];
+      for (const l of kids(ls)) {
+        if (l.nodeName !== "text:list-level-style-number") continue;
+        const i = +(l.getAttribute("text:level") ?? 1) - 1;
+        const f = l.getAttribute("style:num-format") ?? "";
+        lv[i] = {
+          format: ODF_FORMATS[f] ?? "decimal",
+          prefix: l.getAttribute("style:num-prefix") ?? "",
+          suffix: l.getAttribute("style:num-suffix") ?? "",
+          displayLevels: Math.max(1, +(l.getAttribute("text:display-levels") ?? 1) || 1),
+          template: l.getAttribute("loext:num-list-format"),
+          start: +(l.getAttribute("text:start-value") ?? 1) || 1,
+          followed: first(l, "style:list-level-label-alignment")?.getAttribute("text:label-followed-by") ?? "space",
+        };
+      }
+      ctx.listLevels.set(ls.getAttribute("style:name") ?? "", lv);
       ctx.listKinds.set(ls.getAttribute("style:name") ?? "", levels);
     }
   }
 }
 
 /** Normal, headings, quote and code styles as defined in styles.xml, minus what equals the built-in look. */
-function readDocStyles(styles: Document | null): DocStyles {
+function readDocStyles(styles: Document | null, own: boolean): DocStyles {
   if (!styles) return {};
   const names: Record<StyleId, string[]> = { normal: ["Standard"], h1: ["Heading_20_1", "Heading 1"], h2: ["Heading_20_2", "Heading 2"], h3: ["Heading_20_3", "Heading 3"], h4: ["Heading_20_4", "Heading 4"], h5: ["Heading_20_5", "Heading 5"], h6: ["Heading_20_6", "Heading 6"], quote: ["Quote"], code: ["Preformatted_20_Text", "Preformatted Text"] };
   const all = Array.from(styles.getElementsByTagName("style:style")).filter((s) => s.parentNode?.nodeName === "office:styles");
@@ -247,18 +282,27 @@ function readDocStyles(styles: Document | null): DocStyles {
   for (const id of STYLE_IDS) {
     const el = all.find((s) => names[id].includes(s.getAttribute("style:name") ?? ""));
     if (!el) continue;
-    const pp = first(el, "style:paragraph-properties");
-    const run = readRun(first(el, "style:text-properties"));
-    const lh = pp?.getAttribute("fo:line-height");
-    const align = ALIGN[pp?.getAttribute("fo:text-align") ?? ""];
+    // What the file says, through the parent styles and the default style; what it does not say is the file's default (not Loma Writer's look).
+    const lineage: Element[] = [];
+    for (let cur: Element | undefined = el, guard = 0; cur && guard < 12; guard++) {
+      lineage.unshift(cur);
+      const parent = cur.getAttribute("style:parent-style-name");
+      cur = parent ? all.find((x) => x.getAttribute("style:name") === parent) : undefined;
+    }
+    const dflt = Array.from(styles.getElementsByTagName("style:default-style")).find((d) => d.getAttribute("style:family") === "paragraph");
+    const sources = [...(dflt ? [dflt] : []), ...lineage];
+    const pAttr = (name: string) => { for (const e of [...sources].reverse()) { const v = first(e, "style:paragraph-properties")?.getAttribute(name); if (v) return v; } return null; };
+    const run = (own ? lineage : sources).reduce<RunProps>((acc, e) => merge(acc, readRun(first(e, "style:text-properties"))), {});
+    const font = lineage.reduce<RunProps>((acc, e) => merge(acc, readRun(first(e, "style:text-properties"))), {}).font; // the document font is no override
+    const lh = pAttr("fo:line-height");
+    const align = ALIGN[pAttr("fo:text-align") ?? ""];
     const raw: Record<string, unknown> = {
-      ...(id !== "normal" && run.font && !(id === "code" && /mono|courier|consolas/i.test(run.font)) ? { fontFamily: run.font } : {}),
+      ...(id !== "normal" && font && !(id === "code" && /mono|courier|consolas/i.test(font)) ? { fontFamily: font } : {}),
       ...(id !== "normal" && run.sizePt ? { sizePt: run.sizePt } : {}),
-      ...(run.color ? { color: run.color } : {}), ...(run.bold !== undefined ? { bold: run.bold } : {}), ...(run.italic !== undefined ? { italic: run.italic } : {}),
+      ...(own ? { ...(run.color ? { color: run.color } : {}), ...(run.bold !== undefined ? { bold: run.bold } : {}), ...(run.italic !== undefined ? { italic: run.italic } : {}) } : { color: run.color ?? "#000000", bold: run.bold ?? false, italic: run.italic ?? false }),
       ...(align && align !== "left" ? { align } : {}),
-      ...(pt(pp?.getAttribute("fo:margin-top") ?? null) !== undefined ? { spaceBefore: pt(pp!.getAttribute("fo:margin-top")) } : {}),
-      ...(pt(pp?.getAttribute("fo:margin-bottom") ?? null) !== undefined ? { spaceAfter: pt(pp!.getAttribute("fo:margin-bottom")) } : {}),
-      ...(lh?.endsWith("%") ? { lineHeight: parseFloat(lh) / 100 } : {}),
+      ...(own ? {} : { spaceBefore: pt(pAttr("fo:margin-top")) ?? 0, spaceAfter: pt(pAttr("fo:margin-bottom")) ?? 0, lineHeight: lh?.endsWith("%") ? parseFloat(lh) / 100 : 1 }),
+      ...(own ? { ...(pt(pAttr("fo:margin-top")) !== undefined ? { spaceBefore: pt(pAttr("fo:margin-top")) } : {}), ...(pt(pAttr("fo:margin-bottom")) !== undefined ? { spaceAfter: pt(pAttr("fo:margin-bottom")) } : {}), ...(lh?.endsWith("%") ? { lineHeight: parseFloat(lh) / 100 } : {}) } : {}),
     };
     const base = builtinStyle(id, { fontFamily: "", sizePt: 11 }) as unknown as Record<string, unknown>;
     const diff = Object.fromEntries(Object.entries(raw).filter(([k, v]) => k === "fontFamily" || (typeof v === "number" ? Math.abs(v - (base[k] as number)) > 0.25 : v !== base[k])));
@@ -290,6 +334,7 @@ function kindOf(ctx: Ctx, name: string | null): Kind {
   return { kind: "normal" };
 }
 
+const DOC_STYLE_NAMES = new Set(["Standard", "Heading", "Quote", "Preformatted_20_Text", "Preformatted Text", ...[1, 2, 3, 4, 5, 6].flatMap((n) => [`Heading_20_${n}`, `Heading ${n}`])]);
 const GENERIC = new Set(["standard", "text body", "default paragraph style", "body text", "default"]);
 
 function paraRun(ctx: Ctx, name: string | null, kind: Kind): RunProps {
@@ -322,12 +367,6 @@ function frameImage(ctx: Ctx, frame: Element): PM | null {
   return { type: "image", attrs: { src, ...(alt ? { alt } : {}), ...(w && h ? { width: Math.round(w), height: Math.round(h) } : {}), ...floating } };
 }
 
-const ODF_SHAPES: Record<string, string> = {
-  rectangle: "rect", "round-rectangle": "roundRect", ellipse: "ellipse", "isosceles-triangle": "triangle", "right-triangle": "rtTriangle", diamond: "diamond", parallelogram: "parallelogram",
-  trapezoid: "trapezoid", pentagon: "pentagon", hexagon: "hexagon", octagon: "octagon", cross: "plus", heart: "heart", cloud: "cloud", lightning: "lightningBolt", moon: "moon", ring: "donut",
-  "right-arrow": "rightArrow", "left-arrow": "leftArrow", "up-arrow": "upArrow", "down-arrow": "downArrow", "left-right-arrow": "leftRightArrow", "up-down-arrow": "upDownArrow",
-  chevron: "chevron", "pentagon-right": "homePlate", star4: "star4", star5: "star5", star6: "star6", star8: "star8", "rectangular-callout": "wedgeRectCallout", "round-callout": "wedgeEllipseCallout",
-};
 
 const cmOf = (v: string | null) => (px(v) ?? 0);
 
@@ -540,7 +579,10 @@ function inlineOf(ctx: Ctx, parent: Element, base: RunProps, out: PM[]) {
       case "draw:line": case "draw:connector": out.push(lineNode(ctx, el)); break;
       case "draw:g": { const g = groupNode(ctx, el); if (g) out.push(g); break; }
       case "draw:frame": {
-        if (first(el, "draw:text-box")) { out.push(shapeNode(ctx, el, true)); break; }
+        const box = first(el, "draw:text-box");
+        // A text box that holds a table is a layout trick: the table is put in the text, where the box is anchored.
+        if (box && holdsBlocks(box)) { out.push({ type: "inlineBlocks", content: convertBlocks(ctx, box, null, 0) }); break; }
+        if (box) { out.push(shapeNode(ctx, el, true)); break; }
         const img = frameImage(ctx, el);
         if (img) out.push(img);
         break;
@@ -575,7 +617,9 @@ function convertPara(ctx: Ctx, el: Element): { node: PM; kind: Kind; before: boo
   if (lineHeight) base.lineHeight = lineHeight;
   const own = ctx.styles.get(styleName ?? "");
   // Only an automatic (direct) style decorates a paragraph; named styles such as Quote keep their own look.
-  const deco = own?.automatic ? { shading: own.shading, borders: own.borders, layout: own.layout } : undefined;
+  // Spacing and indents come down the style chain (Text body, List Contents, custom styles); the styles Loma Writer edits itself (Standard, headings, quote, code) are in the document styles.
+  const layout = kind.kind === "heading" ? own?.automatic ? own.layout : undefined : st.filter((x) => x.automatic || !DOC_STYLE_NAMES.has(x.name)).reduce<Partial<ParagraphLayout>>((acc, x) => ({ ...acc, ...x.layout }), {});
+  const deco = own?.automatic || (layout && Object.keys(layout).length) ? { shading: own?.automatic ? own.shading : undefined, borders: own?.automatic ? own.borders : undefined, layout: layout && Object.keys(layout).length ? layout : undefined } : undefined;
   const inline: PM[] = [];
   inlineOf(ctx, el, kind.kind === "heading" ? { ...base, bold: undefined, sizePt: undefined } : base, inline);
   const content = splitEquations(mergeText(inline));
@@ -628,6 +672,16 @@ function convertTable(ctx: Ctx, tbl: Element): PM {
 function hoistShapes(node: PM, out: PM[]) {
   const content = node.content ?? [];
   const isObj = (n: PM) => n.type === "shape" || n.type === "shapeGroup";
+  if (node.type === "paragraph" && content.some((n) => n.type === "inlineBlocks")) {
+    // Blocks that were in a frame anchored in this paragraph (a table, a picture): they stay where the anchor is when the paragraph
+    // holds nothing else, and come before the paragraph when it has text (a caption under a picture).
+    const blocks = content.filter((n) => n.type === "inlineBlocks").flatMap((n) => n.content ?? []);
+    const rest = content.filter((n) => n.type !== "inlineBlocks");
+    if (rest.some((n) => n.type !== "text" || n.text?.trim())) { out.push(...blocks, { ...node, content: rest }); return; }
+    out.push(...blocks);
+    if (rest.length) out.push({ ...node, content: rest });
+    return;
+  }
   if (node.type !== "paragraph" || !content.some(isObj)) { out.push(node); return; }
   const align = node.attrs?.textAlign;
   out.push(...content.filter((n) => isObj(n) && n.attrs?.wrap !== "inline").map((n) => ({ ...n, attrs: { ...n.attrs, align: "left" } })));
@@ -638,6 +692,62 @@ function hoistShapes(node: PM, out: PM[]) {
     else if (!isObj(n)) cur.push(n);
   }
   flush();
+}
+
+/** A text box that holds a table or a picture is a layout trick (a caption frame, a table in a frame): what is in it goes into the text. */
+const holdsBlocks = (box: Element): boolean => !!first(box, "table:table") || !!first(box, "draw:frame");
+
+const hasListedHeading = (list: Element): boolean =>
+  Array.from(list.getElementsByTagName("text:list-item")).some((i) => kids(i).some((k) => k.nodeName === "text:h"));
+
+/** The number written in front of an item of a list style at `depth`, once the counters are updated. */
+function listLabel(ctx: Ctx, style: string, depth: number, item: Element): string {
+  const levels = ctx.listLevels.get(style) ?? [];
+  const counters = ctx.listCounters.get(style) ?? [];
+  const sv = item.getAttribute("text:start-value");
+  counters[depth] = sv !== null && Number.isFinite(+sv) ? +sv : (counters[depth] ?? (levels[depth]?.start ?? 1) - 1) + 1;
+  for (let k = depth + 1; k < counters.length; k++) counters[k] = 0;
+  ctx.listCounters.set(style, counters);
+  const lv = levels[depth];
+  if (!lv || lv.format === "none" && !lv.template) return "";
+  const num = (level: number) => {
+    const l = levels[level];
+    return l && l.format !== "none" ? formatPageNumber(counters[level] ?? 1, l.format) : "";
+  };
+  let label: string;
+  if (lv.template) label = lv.template.replace(/%(\d+)%/g, (_m, n: string) => num(+n - 1));
+  else {
+    const from = Math.max(0, depth - lv.displayLevels + 1);
+    label = `${lv.prefix}${Array.from({ length: depth - from + 1 }, (_, i) => num(from + i)).join(".")}${lv.suffix}`;
+  }
+  label = label.trim();
+  return label ? (lv.followed === "nothing" ? label : `${label} `) : "";
+}
+
+/** The items of a list holding headings: every heading gets the number its list style gives it (nesting depth = level). */
+function numberedHeadings(ctx: Ctx, list: Element, style: string, depth: number, out: PM[]) {
+  for (const item of kids(list).filter((i) => i.nodeName === "text:list-item" || i.nodeName === "text:list-header")) {
+    const counted = kids(item).some((k) => k.nodeName === "text:h" || k.nodeName === "text:p");
+    const label = counted && item.nodeName === "text:list-item" ? listLabel(ctx, style, depth, item) : "";
+    for (const child of kids(item)) {
+      if (child.nodeName === "text:list") {
+        if (hasListedHeading(child)) numberedHeadings(ctx, child, child.getAttribute("text:style-name") ?? style, depth + 1, out);
+        else out.push(...convertBlocks(ctx, wrap(child), style, depth + 1));
+      } else if (child.nodeName === "text:h" && label) {
+        const { node } = convertPara(ctx, child);
+        const content = node.content ?? [];
+        node.content = [textNode(label, {}), ...content];
+        out.push(node);
+      } else out.push(...convertBlocks(ctx, wrap(child), style, depth + 1));
+    }
+  }
+}
+
+/** A throwaway container for one element, so that it goes through the ordinary block conversion. */
+function wrap(el: Element): Element {
+  const w = el.ownerDocument.createElementNS(null, "x");
+  w.appendChild(el.cloneNode(true));
+  return w;
 }
 
 /** A paragraph holding a numbering field (text:sequence) is a caption of that label. */
@@ -691,7 +801,7 @@ function tocFromOdt(ctx: Ctx, el: Element): PM {
   const captionsOf = el.nodeName === "text:illustration-index" ? first(el, "text:illustration-index-source")?.getAttribute("text:caption-sequence-name") ?? null : null;
   const levelAttr = +(first(el, "text:table-of-content-source")?.getAttribute("text:outline-level") ?? 3);
   const levels = Math.min(6, Math.max(1, Number.isFinite(levelAttr) ? levelAttr : 3, ...lines.map((l) => +(l.attrs?.level ?? 1))));
-  return { type: "tableOfContents", attrs: { levels, kind: captionsOf ? "captions" : "headings", title: title || (captionsOf ? `Table : ${captionsOf}` : "Table des matières"), label: captionsOf, titleFound: !!title }, content: lines };
+  return { type: "tableOfContents", attrs: { levels, kind: captionsOf ? "captions" : "headings", title, label: captionsOf, titleFound: !!title }, content: lines };
 }
 
 const tocResolved = (blocks: PM[]): PM[] => { const doc = { type: "doc", content: blocks } as JsonNode; resolveTocTargets(doc); return (doc.content ?? []) as PM[]; };
@@ -741,6 +851,12 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
       case "text:list": {
         quote = code = null;
         const style = el.getAttribute("text:style-name") ?? listStyle;
+        // Headings numbered by a list (Chapitre 1 :, 1.1.) are headings with their number written in front, not lists.
+        if (hasListedHeading(el)) {
+          if (!(el.getAttribute("text:continue-numbering") === "true" || el.hasAttribute("text:continue-list")) && style) ctx.listCounters.delete(style);
+          numberedHeadings(ctx, el, style ?? "", 0, out);
+          break;
+        }
         const kind = ctx.listKinds.get(style ?? "")?.[depth] ?? "bulletList";
         const items = kids(el)
           .filter((i) => i.nodeName === "text:list-item" || i.nodeName === "text:list-header")
@@ -792,7 +908,9 @@ function convertBlocks(ctx: Ctx, container: Element, listStyle: string | null, d
       }
       case "text:tracked-changes": ctx.warnings.add("Suivi des modifications : non pris en charge."); break;
       case "draw:frame": {
-        if (first(el, "draw:text-box")) { out.push(shapeNode(ctx, el, true)); break; }
+        const box = first(el, "draw:text-box");
+        if (box && holdsBlocks(box)) { out.push(...convertBlocks(ctx, box, null, 0)); break; }
+        if (box) { out.push(shapeNode(ctx, el, true)); break; }
         const img = frameImage(ctx, el);
         if (img) out.push(paragraph([img]));
         break;
@@ -854,7 +972,7 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
       if (math) formulas.set(path.replace(/\/content\.xml$/, ""), mathmlOrOmmlLatex(math));
     } catch { /* an unreadable formula is reported below, as an unsupported object */ }
   }
-  const ctx: Ctx = { styles: new Map(), listKinds: new Map(), listTypes: new Map(), columns: new Map(), images, formulas, warnings: new Set() };
+  const ctx: Ctx = { styles: new Map(), listKinds: new Map(), listTypes: new Map(), listLevels: new Map(), listCounters: new Map(), columns: new Map(), images, formulas, warnings: new Set() };
   collectStyles(styles ? [styles, content] : [content], ctx);
 
   const text = first(content, "office:text");
@@ -940,6 +1058,6 @@ export async function importOdt(bytes: Uint8Array): Promise<ImportResult> {
   const noteOptions: NotesOptions = cleanNotesOptions({ foot: noteConf("footnote", DEFAULT_NOTES.foot), end: noteConf("endnote", DEFAULT_NOTES.end) });
   const notesAttr = JSON.stringify(noteOptions) === JSON.stringify(DEFAULT_NOTES) ? null : noteOptions;
   const sourceAttrs = merged.length || notesAttr ? { ...(merged.length ? { sources: merged, ...(isCitationStyle(styleName) ? { citationStyle: styleName as CitationStyle } : {}) } : {}), ...(notesAttr ? { notes: notesAttr } : {}) } : null;
-  const docStyles = readDocStyles(styles);
+  const docStyles = readDocStyles(styles, /<meta:generator>\s*Loma Writer/.test(metaXml));
   return { model: { content: { type: "doc", content: tocResolved(ensureBlocks(blocks)), ...(sourceAttrs ? { attrs: sourceAttrs } : {}) }, page, ...(headerFooter ? { headerFooter } : {}), ...(Object.keys(docStyles).length ? { styles: docStyles } : {}) }, warnings: [...ctx.warnings] };
 }
