@@ -196,6 +196,7 @@ function styleChain(ctx: Ctx, id: string | null): StyleDef[] {
 function readDocStyles(ctx: Ctx): DocStyles {
   const ids: Record<StyleId, RegExp> = {
     normal: /^(normal|standard|par défaut)$/, h1: /^(?:heading|titre|überschrift)\s*1$/, h2: /^(?:heading|titre|überschrift)\s*2$/, h3: /^(?:heading|titre|überschrift)\s*3$/,
+    h4: /^(?:heading|titre|überschrift)\s*4$/, h5: /^(?:heading|titre|überschrift)\s*5$/, h6: /^(?:heading|titre|überschrift)\s*6$/,
     quote: /^(quote|citation)$/, code: /^(code|source code|preformatted text|html preformatted)$/,
   };
   const out: DocStyles = {};
@@ -232,7 +233,7 @@ function readDocStyles(ctx: Ctx): DocStyles {
 function kindOfStyle(ctx: Ctx, id: string | null): Kind {
   for (const s of [...styleChain(ctx, id)].reverse()) {
     const h = /^(?:heading|titre|überschrift)\s*(\d)$/.exec(s.name);
-    if (h) return { kind: "heading", level: Math.min(3, +h[1]) };
+    if (h) return { kind: "heading", level: Math.min(6, +h[1]) };
     if (s.name === "title") return { kind: "heading", level: 1 };
     if (["quote", "intense quote", "citation", "block text"].includes(s.name)) return { kind: "quote" };
     if (["code", "source code", "preformatted text", "html preformatted", "texte préformaté"].includes(s.name)) return { kind: "code" };
@@ -247,7 +248,6 @@ function styleRun(ctx: Ctx, id: string | null, kind: Kind): RunProps {
 }
 
 function imageFromDrawing(ctx: Ctx, drawing: Element): PM | null {
-  if (first(drawing, "wp:anchor")) ctx.warnings.add("Images flottantes : le positionnement n'est pas conservé, elles sont placées dans le texte.");
   const blip = first(drawing, "a:blip");
   const embed = blip?.getAttribute("r:embed");
   if (!embed) {
@@ -266,7 +266,15 @@ function imageFromDrawing(ctx: Ctx, drawing: Element): PM | null {
   const cx = +(extent?.getAttribute("cx") ?? 0);
   const cy = +(extent?.getAttribute("cy") ?? 0);
   const alt = first(drawing, "wp:docPr")?.getAttribute("descr") ?? undefined;
-  return { type: "image", attrs: { src, ...(alt ? { alt } : {}), ...(cx ? { width: Math.round(cx / 9525), height: Math.round(cy / 9525) } : {}) } };
+  // A floating picture keeps its wrapping and its position (resolved once the page is known, see `resolvePlacements`).
+  const anchor = child(drawing, "wp:anchor");
+  let place: Record<string, unknown> = {};
+  if (anchor) {
+    const names = kids(anchor).map((k) => k.nodeName);
+    const wrap = names.includes("wp:wrapTopAndBottom") ? "topBottom" : names.some((n) => ["wp:wrapSquare", "wp:wrapTight", "wp:wrapThrough"].includes(n)) ? "square" : anchor.getAttribute("behindDoc") === "1" ? "behind" : "front";
+    place = { wrap, anchor: "page", x: 0, y: 0, z: 0, _raw: readRawPlacement(anchor) };
+  }
+  return { type: "image", attrs: { src, ...(alt ? { alt } : {}), ...(cx ? { width: Math.round(cx / 9525), height: Math.round(cy / 9525) } : {}), ...place } };
 }
 
 const EMU_PX = 9525;
@@ -472,7 +480,14 @@ export function resolvePlacements(blocks: PM[], pageW: number, margins: { top: n
     a.y = Math.round(y);
     if (a.wrap === "front" || a.wrap === "behind") ranked.push({ node, rh: raw.relativeHeight });
   };
-  for (const b of blocks) if (b.type === "shape" || b.type === "shapeGroup") place(b);
+  const walk = (n: PM) => {
+    if (n.type === "shape" || n.type === "shapeGroup") place(n);
+    else if (n.type === "image" && n.attrs && "_raw" in n.attrs) {
+      place(n);
+      if (n.attrs.wrap === "topBottom") n.attrs.wrap = "square"; // a picture has no "above and below" wrapping
+    } else n.content?.forEach(walk);
+  };
+  blocks.forEach(walk);
   for (const layer of ["front", "behind"]) {
     const inLayer = ranked.filter((r) => r.node.attrs!.wrap === layer).sort((p, q) => p.rh - q.rh);
     // Files written by Loma Writer encode z in relativeHeight; for any other writer only the order matters.
@@ -618,7 +633,7 @@ function convertParagraph(ctx: Ctx, p: Element): ParaInfo {
   let kind = kindOfStyle(ctx, styleId);
   const outline = attr(pPr ? child(pPr, "w:outlineLvl") : null, "w:val");
   if (kind.kind === "normal" && outline !== null && +outline <= 2) kind = { kind: "heading", level: +outline + 1 };
-  if (kind.kind === "heading" && /^(?:heading|titre)\s*([4-9])$/.test(styleChain(ctx, styleId).at(-1)?.name ?? "")) ctx.warnings.add("Titres de niveau 4 à 9 ramenés au niveau 3.");
+  if (kind.kind === "heading" && /^(?:heading|titre)\s*([7-9])$/.test(styleChain(ctx, styleId).at(-1)?.name ?? "")) ctx.warnings.add("Titres de niveau 7 à 9 ramenés au niveau 6.");
 
   // Alignment, from the paragraph or its styles.
   let jc = attr(pPr ? child(pPr, "w:jc") : null, "w:val");
@@ -895,14 +910,14 @@ function tocLineFrom(ctx: Ctx, p: Element): PM {
   const at = text.lastIndexOf("\t");
   const title = (at >= 0 ? text.slice(0, at) : text).replace(/\t/g, " ").trim();
   const page = at >= 0 ? text.slice(at + 1).trim() : "";
-  return { type: "tocEntry", attrs: { level: Math.min(3, Math.max(1, lvl ? +lvl[1] : 1)), target: null, page: page.slice(0, 12) }, content: title ? [{ type: "text", text: title }] : [] };
+  return { type: "tocEntry", attrs: { level: Math.min(6, Math.max(1, lvl ? +lvl[1] : 1)), target: null, page: page.slice(0, 12) }, content: title ? [{ type: "text", text: title }] : [] };
 }
 
 /** A table of contents node from its lines (and the field instruction: headings, or the captions of a label). */
 function tocNode(lines: PM[], title: string, instr: string): PM {
   const caption = /\\c\s+"([^"]+)"/i.exec(instr);
   const levelsOf = /\\o\s+"1-(\d)"/i.exec(instr);
-  const levels = Math.min(3, Math.max(...lines.map((l) => +(l.attrs?.level ?? 1)), levelsOf ? +levelsOf[1] : 1));
+  const levels = Math.min(6, Math.max(...lines.map((l) => +(l.attrs?.level ?? 1)), levelsOf ? +levelsOf[1] : 1));
   return { type: "tableOfContents", attrs: { levels, kind: caption ? "captions" : "headings", title, label: caption ? caption[1] : null }, content: lines };
 }
 

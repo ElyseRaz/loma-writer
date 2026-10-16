@@ -16,7 +16,7 @@ const field = (instr: string, result: string) =>
  * `tab` is the position of the right tab, in twips.
  */
 export function tocXml(node: PM, tab: number): string {
-  const levels = Math.min(3, Math.max(1, Math.trunc(Number(node.attrs?.levels)) || 3));
+  const levels = Math.min(6, Math.max(1, Math.trunc(Number(node.attrs?.levels)) || 3));
   const kind = node.attrs?.kind === "captions" ? "captions" : "headings";
   const label = typeof node.attrs?.label === "string" ? node.attrs.label : "";
   const instr = kind === "captions" ? `TOC \\h \\z \\c "${label.replace(/"/g, "")}"` : `TOC \\o "1-${levels}" \\h \\z \\u`;
@@ -26,7 +26,7 @@ export function tocXml(node: PM, tab: number): string {
   const entries = (node.content ?? []).filter((e) => e.type === "tocEntry");
   const begin = `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ${xmlEsc(instr)} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>`;
   entries.forEach((e, i) => {
-    const level = Math.min(3, Math.max(1, Math.trunc(Number(e.attrs?.level)) || 1));
+    const level = Math.min(6, Math.max(1, Math.trunc(Number(e.attrs?.level)) || 1));
     const page = String(e.attrs?.page ?? "");
     const target = typeof e.attrs?.target === "number" && kind === "headings" ? tocBookmark(e.attrs.target) : null;
     const body = target

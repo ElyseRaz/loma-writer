@@ -209,9 +209,10 @@ function image(ctx: Ctx, n: PM): string {
   if (wrap !== "inline") {
     const x = Number(n.attrs?.x) || 0, y = Number(n.attrs?.y) || 0;
     const onPage = wrap === "front" || wrap === "behind";
-    anchor = onPage ? "paragraph" : "paragraph";
+    anchor = "paragraph";
+    const rel = onPage && n.attrs?.anchor !== "paragraph" ? "page" : "paragraph";
     const sname = `${ctx.prefix}Pic${ctx.graphicStyles.length + 1}`;
-    ctx.graphicStyles.push(`<style:style style:name="${sname}" style:family="graphic"><style:graphic-properties style:wrap="${onPage ? "run-through" : "parallel"}"${onPage ? ` style:run-through="${wrap === "behind" ? "background" : "foreground"}"` : ""} style:horizontal-pos="from-left" style:horizontal-rel="${onPage ? "page" : "paragraph"}" style:vertical-pos="from-top" style:vertical-rel="${onPage ? "page" : "paragraph"}"/></style:style>`);
+    ctx.graphicStyles.push(`<style:style style:name="${sname}" style:family="graphic"><style:graphic-properties style:wrap="${onPage ? "run-through" : "parallel"}"${onPage ? ` style:run-through="${wrap === "behind" ? "background" : "foreground"}"` : ""} style:horizontal-pos="from-left" style:horizontal-rel="${rel}" style:vertical-pos="from-top" style:vertical-rel="${rel}"/></style:style>`);
     style = ` draw:style-name="${sname}" draw:z-index="${Math.max(0, 50 + (Number(n.attrs?.z) || 0))}"`;
     place = rotation ? ` draw:transform="rotate (${(-rotation * Math.PI / 180).toFixed(6)}) translate (${pxToCm(x)}cm ${pxToCm(y)}cm)"` : ` svg:x="${pxToCm(x)}cm" svg:y="${pxToCm(y)}cm"`;
   } else if (rotation) place = ` draw:transform="rotate (${(-rotation * Math.PI / 180).toFixed(6)})"`;
@@ -337,7 +338,7 @@ const tocText = (n: PM): string => (n.text ?? "") + (n.content ?? []).map(tocTex
 
 /** A table of contents as OpenDocument has it: the source (what LibreOffice regenerates it from) and the lines as last generated. */
 function tocBlock(ctx: Ctx, n: PM): string {
-  const levels = Math.min(3, Math.max(1, Math.trunc(Number(n.attrs?.levels)) || 3));
+  const levels = Math.min(6, Math.max(1, Math.trunc(Number(n.attrs?.levels)) || 3));
   const title = esc(String(n.attrs?.title ?? ""));
   if (n.attrs?.kind === "captions" && typeof n.attrs.label === "string") {
     // A list of figures / tables: LibreOffice's illustration index of the sequence.
@@ -347,7 +348,7 @@ function tocBlock(ctx: Ctx, n: PM): string {
     return `<text:illustration-index text:protected="false" text:name="${name}"><text:illustration-index-source text:caption-sequence-name="${label}" text:caption-sequence-format="text" text:use-caption="true">${title ? `<text:index-title-template text:style-name="Contents_20_Heading">${title}</text:index-title-template>` : ""}<text:illustration-index-entry-template text:style-name="Illustration_20_Index_20_1"><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/></text:illustration-index-entry-template></text:illustration-index-source><text:index-body>${title ? `<text:index-title text:name="${name}_Head"><text:p text:style-name="Contents_20_Heading">${title}</text:p></text:index-title>` : ""}${lines}</text:index-body></text:illustration-index>`;
   }
   const templates = Array.from({ length: levels }, (_, i) => `<text:table-of-content-entry-template text:outline-level="${i + 1}" text:style-name="Contents_20_${i + 1}"><text:index-entry-chapter/><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/></text:table-of-content-entry-template>`).join("");
-  const lines = (n.content ?? []).filter((e) => e.type === "tocEntry").map((e) => `<text:p text:style-name="Contents_20_${Math.min(3, Math.max(1, Math.trunc(Number(e.attrs?.level)) || 1))}">${esc(tocText(e))}<text:tab/>${esc(String(e.attrs?.page ?? ""))}</text:p>`).join("");
+  const lines = (n.content ?? []).filter((e) => e.type === "tocEntry").map((e) => `<text:p text:style-name="Contents_20_${Math.min(6, Math.max(1, Math.trunc(Number(e.attrs?.level)) || 1))}">${esc(tocText(e))}<text:tab/>${esc(String(e.attrs?.page ?? ""))}</text:p>`).join("");
   const name = `Table_of_Contents${++ctx.tocs}`;
   return `<text:table-of-content text:protected="false" text:name="${name}"><text:table-of-content-source text:outline-level="${levels}">${title ? `<text:index-title-template text:style-name="Contents_20_Heading">${title}</text:index-title-template>` : ""}${templates}</text:table-of-content-source><text:index-body>${title ? `<text:index-title text:name="${name}_Head"><text:p text:style-name="Contents_20_Heading">${title}</text:p></text:index-title>` : ""}${lines}</text:index-body></text:table-of-content>`;
 }
@@ -534,7 +535,7 @@ function namedStyles(model: DocumentModel, sections: OdtSection[], hfStyles: str
     const text = (withSize: boolean) => `${withSize ? `fo:font-size="${r.sizePt}pt" ` : ""}${id === "code" || model.styles?.[id]?.fontFamily ? `fo:font-family="${esc(r.fontFamily)}" ` : ""}fo:font-weight="${r.bold ? "bold" : "normal"}" fo:font-style="${r.italic ? "italic" : "normal"}" fo:color="${r.color}"`;
     return { para, text };
   };
-  const heading = (n: 1 | 2 | 3) => {
+  const heading = (n: 1 | 2 | 3 | 4 | 5 | 6) => {
     const l = look(`h${n}` as StyleId);
     return `<style:style style:name="Heading_20_${n}" style:display-name="Heading ${n}" style:family="paragraph" style:parent-style-name="Standard" style:next-style-name="Standard" style:default-outline-level="${n}"><style:paragraph-properties ${l.para} fo:keep-with-next="always"/><style:text-properties ${l.text(true)}/></style:style>`;
   };
@@ -551,9 +552,9 @@ ${notesConfiguration(model)}
 <style:style style:name="Caption" style:family="paragraph" style:parent-style-name="Standard" style:class="extra"><style:paragraph-properties fo:margin-top="0.1cm" fo:margin-bottom="0.28cm"/><style:text-properties fo:font-size="9pt" fo:font-style="italic" fo:color="#44546a"/></style:style>
 <style:style style:name="Illustration_20_Index_20_1" style:display-name="Illustration Index 1" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-bottom="0.1cm"><style:tab-stops><style:tab-stop style:position="${tocWidth}" style:type="right" style:leader-style="dotted" style:leader-text="."/></style:tab-stops></style:paragraph-properties></style:style>
 <style:style style:name="Contents_20_Heading" style:display-name="Contents Heading" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-top="0.42cm" fo:margin-bottom="0.3cm"/><style:text-properties fo:font-size="16pt" fo:font-weight="bold" fo:color="#1d4ed8"/></style:style>
-${[1, 2, 3].map((l) => `<style:style style:name="Contents_20_${l}" style:display-name="Contents ${l}" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-left="${(l - 1) * 0.42}cm" fo:margin-bottom="0.1cm"><style:tab-stops><style:tab-stop style:position="${tocWidth}" style:type="right" style:leader-style="dotted" style:leader-text="."/></style:tab-stops></style:paragraph-properties>${l === 1 ? '<style:text-properties fo:font-weight="bold"/>' : ""}</style:style>`).join("\n")}
+${[1, 2, 3, 4, 5, 6].map((l) => `<style:style style:name="Contents_20_${l}" style:display-name="Contents ${l}" style:family="paragraph" style:parent-style-name="Standard" style:class="index"><style:paragraph-properties fo:margin-left="${(l - 1) * 0.42}cm" fo:margin-bottom="0.1cm"><style:tab-stops><style:tab-stop style:position="${tocWidth}" style:type="right" style:leader-style="dotted" style:leader-text="."/></style:tab-stops></style:paragraph-properties>${l === 1 ? '<style:text-properties fo:font-weight="bold"/>' : ""}</style:style>`).join("\n")}
 <style:style style:name="Standard" style:family="paragraph" style:class="text"><style:paragraph-properties ${normal.para}/>${model.styles?.normal ? `<style:text-properties ${normal.text(false).replace(/fo:font-family="[^"]*" /, "")}/>` : ""}</style:style>
-${heading(1)}${heading(2)}${heading(3)}
+${heading(1)}${heading(2)}${heading(3)}${heading(4)}${heading(5)}${heading(6)}
 <style:style style:name="Quote" style:display-name="Quote" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties ${quoteLook.para} fo:margin-left="1cm" fo:border-left="1.5pt solid #2563eb" fo:padding-left="0.3cm"/><style:text-properties ${quoteLook.text(true)}/></style:style>
 <style:style style:name="Preformatted_20_Text" style:display-name="Preformatted Text" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties ${codeLook.para} fo:background-color="#f3f4f6"/><style:text-properties ${codeLook.text(true).replace(/fo:font-family="[^"]*"/, `fo:font-family="${codeFont === "JetBrains Mono" ? "Liberation Mono" : esc(codeFont)}"`)}/></style:style>
 <style:style style:name="Horizontal_20_Line" style:display-name="Horizontal Line" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:border-bottom="0.5pt solid #999999" fo:margin-bottom="0.3cm"/></style:style>

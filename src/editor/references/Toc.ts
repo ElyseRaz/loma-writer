@@ -1,7 +1,7 @@
 import { Extension, mergeAttributes, Node } from "@tiptap/core";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import { cleanLabel, collectCaptions } from "./Captions";
-import { captionLines, collectHeadings, DEFAULT_TOC_TITLE, entryNodes, headingLines, MAX_TOC_LEVEL } from "./tocBuild";
+import { captionLines, collectHeadings, DEFAULT_TOC_TITLE, entryNodes, headingLines, MAX_TOC_LEVEL, DEFAULT_TOC_LEVELS } from "./tocBuild";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
@@ -24,7 +24,7 @@ export interface ReferencesStorage {
 /** Title of the list of the captions of a label. */
 export const captionsTitle = (label: string) => (label === "Figure" ? "Table des figures" : label === "Tableau" ? "Table des tableaux" : label === "Équation" ? "Table des équations" : `Table : ${label}`);
 
-export const clampLevels = (v: unknown) => Math.min(MAX_TOC_LEVEL, Math.max(1, Math.trunc(Number(v)) || MAX_TOC_LEVEL));
+export const clampLevels = (v: unknown) => Math.min(MAX_TOC_LEVEL, Math.max(1, Math.trunc(Number(v)) || DEFAULT_TOC_LEVELS));
 
 /** One line of a table of contents: the text of a heading, a dotted leader and its page number (drawn by the stylesheet). */
 export const TocEntry = Node.create({
@@ -52,7 +52,7 @@ export const TableOfContents = Node.create({
   isolating: true,
   addAttributes() {
     return {
-      levels: { default: MAX_TOC_LEVEL, parseHTML: (el: HTMLElement) => clampLevels(el.getAttribute("data-levels")) },
+      levels: { default: DEFAULT_TOC_LEVELS, parseHTML: (el: HTMLElement) => clampLevels(el.getAttribute("data-levels")) },
       kind: { default: "headings", parseHTML: (el: HTMLElement) => (el.getAttribute("data-kind") === "captions" ? "captions" : "headings") },
       title: { default: DEFAULT_TOC_TITLE, parseHTML: (el: HTMLElement) => (el.getAttribute("data-title") ?? DEFAULT_TOC_TITLE).slice(0, 120) },
       /** Captions only: the label of the list ("Figure", "Tableau"…). */

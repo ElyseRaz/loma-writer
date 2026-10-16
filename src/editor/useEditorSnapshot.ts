@@ -17,7 +17,7 @@ export interface EditorSnapshot {
   codeBlock: boolean;
   link: boolean;
   align: "left" | "center" | "right" | "justify";
-  heading: 0 | 1 | 2 | 3;
+  heading: 0 | 1 | 2 | 3 | 4 | 5 | 6;
   fontFamily: string | null;
   fontSize: string | null;
   color: string | null;
@@ -48,7 +48,7 @@ export function useEditorSnapshot(editor: Editor | null): EditorSnapshot {
         if (!e) return EMPTY;
         const ts = e.getAttributes("textStyle") as Record<string, string | undefined>;
         const alignAttr = (e.getAttributes("paragraph").textAlign ?? e.getAttributes("heading").textAlign ?? "left") as EditorSnapshot["align"];
-        const level = [1, 2, 3].find((l) => e.isActive("heading", { level: l })) ?? 0;
+        const level = [1, 2, 3, 4, 5, 6].find((l) => e.isActive("heading", { level: l })) ?? 0;
         const count = e.storage.characterCount as { words: () => number; characters: () => number };
         return {
           bold: e.isActive("bold"), italic: e.isActive("italic"), underline: e.isActive("underline"), strike: e.isActive("strike"),

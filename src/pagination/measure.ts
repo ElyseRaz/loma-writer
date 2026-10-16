@@ -187,7 +187,7 @@ function headerRowsAbove(row: HTMLTableRowElement): HTMLTableRowElement[] {
 
 /** Lines of a unit of several text blocks (see `AtomRef.flows`): block by block, then merged by height. */
 function measureFlows(view: EditorView, ref: AtomRef, origin: number, scale: number): LineBox[] {
-  const els = Array.from(ref.el.querySelectorAll<HTMLElement>("p, h1, h2, h3, pre")).filter((e) => !e.closest(".pg-spacer"));
+  const els = Array.from(ref.el.querySelectorAll<HTMLElement>("p, h1, h2, h3, h4, h5, h6, pre")).filter((e) => !e.closest(".pg-spacer"));
   const entries: Array<{ top: number; bottom: number; start: number; flow: number }> = [];
   const ends: number[] = [];
   els.forEach((el, flow) => {

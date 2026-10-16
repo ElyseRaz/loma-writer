@@ -6,7 +6,7 @@ import {
   Highlighter, IndentDecrease, Search, IndentIncrease, Italic, Keyboard, Link, List, ListOrdered, Minus, Moon, MousePointer2,
   PanelLeft, Pilcrow, Printer, Quote, Redo2, RemoveFormatting, Ruler, Save, SaveAll, Scissors, Settings, SpellCheck,
   Strikethrough, Subscript, Sun, Superscript, Table, Underline, Undo2, ZoomIn, ZoomOut, Info, Hash, FileText,
-  FileCode, SeparatorHorizontal, BookOpen, Smile, BarChart3, Bookmark, CornerDownRight, Sigma, PanelTop, PanelBottom, TextCursorInput, Heading1, Heading2, Heading3, Power, type LucideIcon,
+  FileCode, SeparatorHorizontal, BookOpen, Smile, BarChart3, Bookmark, CornerDownRight, Sigma, PanelTop, PanelBottom, TextCursorInput, Heading1, Heading2, Heading3, Heading4, Heading5, Heading6, Power, type LucideIcon,
 } from "lucide-react";
 import { useLomaEditor } from "./EditorProvider";
 import { captureFormat } from "./formatPainter";
@@ -154,6 +154,9 @@ export function CommandsProvider({ children }: { children: ReactNode }) {
     add({ id: "style.normal", label: "Style Normal", icon: Pilcrow, shortcut: "Ctrl+Alt+0", group: "Styles", active: snap.heading === 0 && !snap.blockquote && !snap.codeBlock, run: () => (snap.blockquote ? chain().unsetBlockquote().setParagraph().run() : chain().setParagraph().run()) });
     add({ id: "style.h1", label: "Titre 1", icon: Heading1, shortcut: "Ctrl+Alt+1", group: "Styles", active: snap.heading === 1, run: () => chain().setHeading({ level: 1 }).run() });
     add({ id: "style.h2", label: "Titre 2", icon: Heading2, shortcut: "Ctrl+Alt+2", group: "Styles", active: snap.heading === 2, run: () => chain().setHeading({ level: 2 }).run() });
+    add({ id: "style.h4", label: "Titre 4", icon: Heading4, shortcut: "Ctrl+Alt+4", group: "Styles", active: snap.heading === 4, run: () => chain().setHeading({ level: 4 }).run() });
+    add({ id: "style.h5", label: "Titre 5", icon: Heading5, shortcut: "Ctrl+Alt+5", group: "Styles", active: snap.heading === 5, run: () => chain().setHeading({ level: 5 }).run() });
+    add({ id: "style.h6", label: "Titre 6", icon: Heading6, shortcut: "Ctrl+Alt+6", group: "Styles", active: snap.heading === 6, run: () => chain().setHeading({ level: 6 }).run() });
     add({ id: "style.h3", label: "Titre 3", icon: Heading3, shortcut: "Ctrl+Alt+3", group: "Styles", active: snap.heading === 3, run: () => chain().setHeading({ level: 3 }).run() });
     add({ id: "style.quote", label: "Citation", icon: Quote, shortcut: "Ctrl+Shift+B", group: "Styles", active: snap.blockquote, run: () => chain().toggleBlockquote().run() });
     add({ id: "style.code", label: "Bloc de code", icon: Code, shortcut: "Ctrl+Alt+C", group: "Styles", active: snap.codeBlock, run: () => chain().toggleCodeBlock().run() });

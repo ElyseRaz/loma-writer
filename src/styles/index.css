@@ -157,7 +157,10 @@ select {
 }
 .paper .ProseMirror h1,
 .paper .ProseMirror h2,
-.paper .ProseMirror h3 {
+.paper .ProseMirror h3,
+.paper .ProseMirror h4,
+.paper .ProseMirror h5,
+.paper .ProseMirror h6 {
   font-weight: 600;
   margin: 1.1em 0 0.4em;
   line-height: 1.25;
@@ -165,6 +168,9 @@ select {
 .paper .ProseMirror h1 { font-size: 22pt; letter-spacing: -0.015em; color: #1d4ed8; }
 .paper .ProseMirror h2 { font-size: 16pt; letter-spacing: -0.01em; }
 .paper .ProseMirror h3 { font-size: 13pt; }
+.paper .ProseMirror h4 { font-size: 12pt; font-style: italic; }
+.paper .ProseMirror h5 { font-size: 11pt; }
+.paper .ProseMirror h6 { font-size: 11pt; font-weight: 400; font-style: italic; }
 .paper .ProseMirror ul { list-style: disc; padding-left: 1.6em; margin: 0 0 0.6em; }
 .paper .ProseMirror ol { list-style: decimal; padding-left: 1.6em; margin: 0 0 0.6em; }
 .paper .ProseMirror li > p { margin: 0 0 0.2em; }
@@ -291,7 +297,10 @@ select {
 .paper.show-marks .ProseMirror p::after,
 .paper.show-marks .ProseMirror h1::after,
 .paper.show-marks .ProseMirror h2::after,
-.paper.show-marks .ProseMirror h3::after {
+.paper.show-marks .ProseMirror h3::after,
+.paper.show-marks .ProseMirror h4::after,
+.paper.show-marks .ProseMirror h5::after,
+.paper.show-marks .ProseMirror h6::after {
   content: "¶";
   color: #93a4c8;
   font-weight: 400;
@@ -383,7 +392,7 @@ select {
 
 /* Sections: the left and right margin of the section a top-level block belongs to (set by the pagination, see sectionMargins). */
 .paper .ProseMirror > * * { --sec-l: 0px; --sec-r: 0px; }
-.paper .ProseMirror > p, .paper .ProseMirror > h1, .paper .ProseMirror > h2, .paper .ProseMirror > h3, .paper .ProseMirror > ul, .paper .ProseMirror > ol,
+.paper .ProseMirror > p, .paper .ProseMirror > h1, .paper .ProseMirror > h2, .paper .ProseMirror > h3, .paper .ProseMirror > h4, .paper .ProseMirror > h5, .paper .ProseMirror > h6, .paper .ProseMirror > ul, .paper .ProseMirror > ol,
 .paper .ProseMirror > blockquote, .paper .ProseMirror > pre, .paper .ProseMirror > hr, .paper .ProseMirror > .tableWrapper, .paper .ProseMirror > .shape-anchor,
 .paper .ProseMirror > .section-break, .paper .ProseMirror > .page-break, .paper .ProseMirror > .toc, .paper .ProseMirror > .endnotes, .paper .ProseMirror > .bibliography { margin-left: var(--sec-l, 0px); margin-right: var(--sec-r, 0px); }
 .paper .ProseMirror > .tableWrapper[data-placed] { margin-left: calc(var(--sec-l, 0px) + var(--place-x, 0px)); }
@@ -458,6 +467,9 @@ select {
 .paper .ProseMirror .toc-entry[data-level="1"] { font-weight: 600; }
 .paper .ProseMirror .toc-entry[data-level="2"] { padding-left: 1.2em; }
 .paper .ProseMirror .toc-entry[data-level="3"] { padding-left: 2.4em; }
+.paper .ProseMirror .toc-entry[data-level="4"] { padding-left: 3.6em; }
+.paper .ProseMirror .toc-entry[data-level="5"] { padding-left: 4.8em; }
+.paper .ProseMirror .toc-entry[data-level="6"] { padding-left: 6em; }
 
 /* Captions ("Figure 1 : …"): a paragraph with a numbering field. */
 .paper .ProseMirror p[data-caption] { font-size: 0.9em; font-style: italic; color: #44546a; margin-top: 0.3em; margin-bottom: 0.8em; }

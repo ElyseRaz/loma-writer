@@ -33,7 +33,7 @@ import type { Extensions } from "@tiptap/react";
 /** `pagination: false` is for tests that run without a layout engine. */
 export function createExtensions(options: { pagination?: boolean } = {}): Extensions {
   return [
-    StarterKit.configure({ heading: { levels: [1, 2, 3] }, link: { openOnClick: false, autolink: true }, strike: false }),
+    StarterKit.configure({ heading: { levels: [1, 2, 3, 4, 5, 6] }, link: { openOnClick: false, autolink: true }, strike: false }),
     // Ctrl+Shift+S is reserved for "Enregistrer sous".
     Strike.extend({ addKeyboardShortcuts: () => ({ "Mod-Shift-x": ({ editor }) => editor.commands.toggleStrike() }) }),
     TextStyleKit,

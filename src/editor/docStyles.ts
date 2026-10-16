@@ -1,5 +1,5 @@
 /** Paragraph styles of a document that the user can edit ("Modifier le style…"). */
-export type StyleId = "normal" | "h1" | "h2" | "h3" | "quote" | "code";
+export type StyleId = "normal" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "quote" | "code";
 
 export interface StyleDef {
   fontFamily?: string;
@@ -17,9 +17,9 @@ export interface StyleDef {
 /** Only what differs from the built-in look is stored. */
 export type DocStyles = Partial<Record<StyleId, StyleDef>>;
 
-export const STYLE_IDS: StyleId[] = ["normal", "h1", "h2", "h3", "quote", "code"];
-export const STYLE_LABELS: Record<StyleId, string> = { normal: "Normal", h1: "Titre 1", h2: "Titre 2", h3: "Titre 3", quote: "Citation", code: "Code" };
-export const STYLE_SELECTORS: Record<StyleId, string> = { normal: "p", h1: "h1", h2: "h2", h3: "h3", quote: "blockquote", code: "pre" };
+export const STYLE_IDS: StyleId[] = ["normal", "h1", "h2", "h3", "h4", "h5", "h6", "quote", "code"];
+export const STYLE_LABELS: Record<StyleId, string> = { normal: "Normal", h1: "Titre 1", h2: "Titre 2", h3: "Titre 3", h4: "Titre 4", h5: "Titre 5", h6: "Titre 6", quote: "Citation", code: "Code" };
+export const STYLE_SELECTORS: Record<StyleId, string> = { normal: "p", h1: "h1", h2: "h2", h3: "h3", h4: "h4", h5: "h5", h6: "h6", quote: "blockquote", code: "pre" };
 
 /** The built-in look of each style (what the stylesheet draws without any override). `font`/`size` of Normal come from the document defaults. */
 export function builtinStyle(id: StyleId, defaults: { fontFamily: string; sizePt: number }): Required<StyleDef> {
@@ -29,6 +29,9 @@ export function builtinStyle(id: StyleId, defaults: { fontFamily: string; sizePt
     case "h1": return { ...base, sizePt: 22, color: "#1d4ed8", bold: true, spaceBefore: 24, spaceAfter: 9, lineHeight: 1.25 };
     case "h2": return { ...base, sizePt: 16, bold: true, spaceBefore: 18, spaceAfter: 6, lineHeight: 1.25 };
     case "h3": return { ...base, sizePt: 13, bold: true, spaceBefore: 14, spaceAfter: 5, lineHeight: 1.25 };
+    case "h4": return { ...base, sizePt: 12, bold: true, italic: true, spaceBefore: 12, spaceAfter: 4, lineHeight: 1.25 };
+    case "h5": return { ...base, sizePt: 11, bold: true, spaceBefore: 10, spaceAfter: 3, lineHeight: 1.25 };
+    case "h6": return { ...base, sizePt: 11, bold: false, italic: true, spaceBefore: 10, spaceAfter: 3, lineHeight: 1.25 };
     case "quote": return { ...base, color: "#3f4a63", italic: true, spaceBefore: 11, spaceAfter: 11 };
     case "code": return { ...base, fontFamily: "JetBrains Mono", sizePt: 10, spaceBefore: 8, spaceAfter: 8 };
   }

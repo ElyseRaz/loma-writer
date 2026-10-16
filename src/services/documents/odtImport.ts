@@ -240,7 +240,7 @@ function collectStyles(docs: Document[], ctx: Ctx) {
 /** Normal, headings, quote and code styles as defined in styles.xml, minus what equals the built-in look. */
 function readDocStyles(styles: Document | null): DocStyles {
   if (!styles) return {};
-  const names: Record<StyleId, string[]> = { normal: ["Standard"], h1: ["Heading_20_1", "Heading 1"], h2: ["Heading_20_2", "Heading 2"], h3: ["Heading_20_3", "Heading 3"], quote: ["Quote"], code: ["Preformatted_20_Text", "Preformatted Text"] };
+  const names: Record<StyleId, string[]> = { normal: ["Standard"], h1: ["Heading_20_1", "Heading 1"], h2: ["Heading_20_2", "Heading 2"], h3: ["Heading_20_3", "Heading 3"], h4: ["Heading_20_4", "Heading 4"], h5: ["Heading_20_5", "Heading 5"], h6: ["Heading_20_6", "Heading 6"], quote: ["Quote"], code: ["Preformatted_20_Text", "Preformatted Text"] };
   const all = Array.from(styles.getElementsByTagName("style:style")).filter((s) => s.parentNode?.nodeName === "office:styles");
   const out: DocStyles = {};
   const pt = (v: string | null) => { const n = px(v); return n === null ? undefined : Math.round(n * 0.75 * 2) / 2; };
@@ -282,7 +282,7 @@ type Kind = { kind: "normal" } | { kind: "heading"; level: number } | { kind: "q
 function kindOf(ctx: Ctx, name: string | null): Kind {
   for (const s of [...chain(ctx, name)].reverse()) {
     const h = /^heading[ _](\d+)$/.exec(s.display.replace(/_20_/g, " ")) ?? /^heading[ _]?(\d+)$/.exec(s.name.toLowerCase().replace(/_20_/g, " "));
-    if (h) return { kind: "heading", level: Math.min(3, +h[1]) };
+    if (h) return { kind: "heading", level: Math.min(6, +h[1]) };
     if (s.display === "title") return { kind: "heading", level: 1 };
     if (["quote", "quotations", "block quote", "citation", "citations"].includes(s.display)) return { kind: "quote" };
     if (["preformatted text", "source text", "source code", "code", "texte préformaté"].includes(s.display)) return { kind: "code" };
@@ -310,12 +310,16 @@ function frameImage(ctx: Ctx, frame: Element): PM | null {
   if (!img || !href) { ctx.warnings.add("Objets incorporés (formules, diagrammes…) : ignorés."); return null; }
   const src = ctx.images.get(href.replace(/^\.\//, ""));
   if (!src) { ctx.warnings.add("Une image du document est introuvable dans le fichier."); return null; }
-  if (frame.getAttribute("text:anchor-type") && frame.getAttribute("text:anchor-type") !== "as-char")
-    ctx.warnings.add("Images flottantes : le positionnement n'est pas conservé, elles sont placées dans le texte.");
   const w = px(frame.getAttribute("svg:width"));
   const h = px(frame.getAttribute("svg:height"));
   const alt = first(frame, "svg:desc")?.textContent ?? undefined;
-  return { type: "image", attrs: { src, ...(alt ? { alt } : {}), ...(w && h ? { width: Math.round(w), height: Math.round(h) } : {}) } };
+  // A floating picture keeps its wrapping, its anchor and its position.
+  const style = ctx.styles.get(frame.getAttribute("draw:style-name") ?? "")?.gfx ?? {};
+  const tr = parseTransform(frame.getAttribute("draw:transform"));
+  const pos = { x: tr.x ?? (frame.hasAttribute("svg:x") ? cmOf(frame.getAttribute("svg:x")) : null), y: tr.y ?? (frame.hasAttribute("svg:y") ? cmOf(frame.getAttribute("svg:y")) : null) };
+  const place = odfPlacement(ctx, frame, style, w ?? 0, h ?? 0, pos);
+  const floating = place.wrap !== "inline" ? { wrap: place.wrap === "topBottom" ? "square" : place.wrap, anchor: place.anchor, x: place.x, y: place.y, z: zOf(frame), ...(tr.rotation ? { rotation: tr.rotation } : {}) } : {};
+  return { type: "image", attrs: { src, ...(alt ? { alt } : {}), ...(w && h ? { width: Math.round(w), height: Math.round(h) } : {}), ...floating } };
 }
 
 const ODF_SHAPES: Record<string, string> = {
@@ -561,8 +565,8 @@ function convertPara(ctx: Ctx, el: Element): { node: PM; kind: Kind; before: boo
   let kind = kindOf(ctx, styleName);
   if (el.nodeName === "text:h") {
     const lvl = +(el.getAttribute("text:outline-level") ?? 1);
-    if (lvl > 3) ctx.warnings.add("Titres de niveau 4 à 9 ramenés au niveau 3.");
-    kind = { kind: "heading", level: Math.min(3, lvl) };
+    if (lvl > 6) ctx.warnings.add("Titres de niveau 7 à 9 ramenés au niveau 6.");
+    kind = { kind: "heading", level: Math.min(6, lvl) };
   }
   const st = chain(ctx, styleName);
   const align = [...st].reverse().find((s) => s.align)?.align;
@@ -682,11 +686,11 @@ function tocFromOdt(ctx: Ctx, el: Element): PM {
     const raw = textOfEl(k);
     const at = raw.lastIndexOf("\t");
     const text = (at >= 0 ? raw.slice(0, at) : raw).replace(/\t/g, " ").trim();
-    lines.push({ type: "tocEntry", attrs: { level: Math.min(3, Math.max(1, lvl ? +lvl[1] : 1)), target: null, page: (at >= 0 ? raw.slice(at + 1).trim() : "").slice(0, 12) }, content: text ? [{ type: "text", text }] : [] });
+    lines.push({ type: "tocEntry", attrs: { level: Math.min(6, Math.max(1, lvl ? +lvl[1] : 1)), target: null, page: (at >= 0 ? raw.slice(at + 1).trim() : "").slice(0, 12) }, content: text ? [{ type: "text", text }] : [] });
   }
   const captionsOf = el.nodeName === "text:illustration-index" ? first(el, "text:illustration-index-source")?.getAttribute("text:caption-sequence-name") ?? null : null;
   const levelAttr = +(first(el, "text:table-of-content-source")?.getAttribute("text:outline-level") ?? 3);
-  const levels = Math.min(3, Math.max(1, Number.isFinite(levelAttr) ? levelAttr : 3, ...lines.map((l) => +(l.attrs?.level ?? 1))));
+  const levels = Math.min(6, Math.max(1, Number.isFinite(levelAttr) ? levelAttr : 3, ...lines.map((l) => +(l.attrs?.level ?? 1))));
   return { type: "tableOfContents", attrs: { levels, kind: captionsOf ? "captions" : "headings", title: title || (captionsOf ? `Table : ${captionsOf}` : "Table des matières"), label: captionsOf, titleFound: !!title }, content: lines };
 }
 

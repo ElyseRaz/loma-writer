@@ -14,6 +14,9 @@ const STYLES: Array<{ id: string; styleId: StyleId; label: string; preview: stri
   { id: "style.h1", styleId: "h1", label: "Titre 1", preview: "AaBb", previewClass: "text-[17px] font-semibold text-accent" },
   { id: "style.h2", styleId: "h2", label: "Titre 2", preview: "AaBbCc", previewClass: "text-[14px] font-semibold" },
   { id: "style.h3", styleId: "h3", label: "Titre 3", preview: "AaBbCc", previewClass: "text-[12px] font-semibold" },
+  { id: "style.h4", styleId: "h4", label: "Titre 4", preview: "AaBbCc", previewClass: "text-[12px] font-semibold italic" },
+  { id: "style.h5", styleId: "h5", label: "Titre 5", preview: "AaBbCc", previewClass: "text-[11px] font-semibold" },
+  { id: "style.h6", styleId: "h6", label: "Titre 6", preview: "AaBbCc", previewClass: "text-[11px] italic" },
   { id: "style.quote", styleId: "quote", label: "Citation", preview: "« AaBb »", previewClass: "text-[12px] italic text-muted" },
   { id: "style.code", styleId: "code", label: "Code", preview: "AaBb", previewClass: "font-mono text-[12px]" },
 ];

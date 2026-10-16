@@ -32,7 +32,7 @@ const TWIPS_PER_PX = 15;
 const ALIGN: Record<string, (typeof AlignmentType)[keyof typeof AlignmentType]> = {
   left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED,
 };
-const HEADINGS = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3];
+const HEADINGS = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6];
 const MAX_IMAGE_WIDTH_PX = 600;
 const hex = (c: string) => c.replace("#", "").toUpperCase();
 
@@ -191,7 +191,7 @@ function paragraphFor(ctx: Ctx, n: PM, extra: Record<string, unknown> = {}, list
     ...(L.pageBreakBefore ? { pageBreakBefore: true } : {}),
     ...(L.keepWithNext ? { keepNext: true } : {}),
     ...(L.keepLines ? { keepLines: true } : {}),
-    ...(n.type === "heading" ? { heading: HEADINGS[Math.min(3, Math.max(1, +(n.attrs?.level ?? 1))) - 1] } : {}),
+    ...(n.type === "heading" ? { heading: HEADINGS[Math.min(6, Math.max(1, +(n.attrs?.level ?? 1))) - 1] } : {}),
     ...(list ? { numbering: { reference: list.ref, level: list.level, instance: list.instance } } : {}),
     ...extra,
   });
@@ -427,6 +427,9 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
         heading1: look("h1", !!model.styles?.h1?.fontFamily),
         heading2: look("h2", !!model.styles?.h2?.fontFamily),
         heading3: look("h3", !!model.styles?.h3?.fontFamily),
+        heading4: look("h4", !!model.styles?.h4?.fontFamily),
+        heading5: look("h5", !!model.styles?.h5?.fontFamily),
+        heading6: look("h6", !!model.styles?.h6?.fontFamily),
       },
       characterStyles: [{ id: "EndnoteReference", name: "endnote reference", run: { superScript: true } }],
       paragraphStyles: [
@@ -439,6 +442,7 @@ export async function exportDocx(model: DocumentModel): Promise<ExportResult> {
         { id: "TOC1", name: "toc 1", basedOn: "Normal", next: "Normal", run: { bold: true }, paragraph: { spacing: { after: 80 } } },
         { id: "TOC2", name: "toc 2", basedOn: "Normal", next: "Normal", paragraph: { spacing: { after: 60 }, indent: { left: 240 } } },
         { id: "TOC3", name: "toc 3", basedOn: "Normal", next: "Normal", paragraph: { spacing: { after: 60 }, indent: { left: 480 } } },
+        ...[4, 5, 6].map((l) => ({ id: `TOC${l}`, name: `toc ${l}`, basedOn: "Normal", next: "Normal", paragraph: { spacing: { after: 60 }, indent: { left: (l - 1) * 240 } } })),
         { id: "CodeBlock", name: "Code", basedOn: "Normal", run: { ...look("code").run, font: st("code").fontFamily === "JetBrains Mono" ? "Courier New" : st("code").fontFamily }, paragraph: { ...look("code").paragraph, shading: { type: ShadingType.CLEAR, fill: "F3F4F6", color: "auto" } } },
       ],
     },

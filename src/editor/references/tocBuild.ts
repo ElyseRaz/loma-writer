@@ -9,7 +9,9 @@ export interface HeadingInfo {
   pos: number;
 }
 
-export const MAX_TOC_LEVEL = 3;
+export const MAX_TOC_LEVEL = 6;
+/** Levels of a table of contents when nothing else is chosen. */
+export const DEFAULT_TOC_LEVELS = 3;
 export const DEFAULT_TOC_TITLE = "Table des matières";
 
 /** Every heading of the document (empty ones included, so that ranks stay stable). */
