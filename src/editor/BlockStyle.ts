@@ -29,6 +29,9 @@ declare module "@tiptap/core" {
   }
 }
 
+/** A shading is a #rrggbb colour: anything else in pasted HTML would end up inside a style attribute. */
+const safeColor = (v: string | null): string | null => (v && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim() : null);
+
 /**
  * Paragraph and table-cell decoration: shading ("Trame de fond") and borders ("Bordures").
  * Stored as node attributes, so they survive editing and are written to DOCX/ODT.
@@ -43,7 +46,7 @@ export const BlockStyle = Extension.create({
         attributes: {
           shading: {
             default: null,
-            parseHTML: (el: HTMLElement) => el.getAttribute("data-shading"),
+            parseHTML: (el: HTMLElement) => safeColor(el.getAttribute("data-shading")),
             renderHTML: (a: Record<string, unknown>) => (a.shading ? { "data-shading": a.shading, style: `background-color:${a.shading};padding:2px 6px` } : {}),
           },
           borders: {
@@ -60,7 +63,7 @@ export const BlockStyle = Extension.create({
         attributes: {
           shading: {
             default: null,
-            parseHTML: (el: HTMLElement) => el.getAttribute("data-shading"),
+            parseHTML: (el: HTMLElement) => safeColor(el.getAttribute("data-shading")),
             renderHTML: (a: Record<string, unknown>) => (a.shading ? { "data-shading": a.shading, style: `background-color:${a.shading}` } : {}),
           },
           borderless: {

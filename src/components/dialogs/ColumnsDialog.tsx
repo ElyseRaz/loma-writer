@@ -45,7 +45,7 @@ export function ColumnsDialog() {
           <span className={label}>Nombre de colonnes</span>
           <div className="mt-1 flex flex-wrap items-center gap-1.5" role="group" aria-label="Nombre de colonnes">
             {[1, 2, 3, 4].map((n) => (
-              <button key={n} type="button" aria-pressed={count === n} onClick={() => setCount(n)} className={cn("flex h-12 w-14 items-center justify-center gap-0.5 rounded-md border", count === n ? "border-accent bg-accent-soft" : "border-line hover:bg-hover")} title={n === 1 ? "Une colonne" : `${n} colonnes`}>
+              <button key={n} type="button" aria-pressed={count === n} onClick={() => setCount(n)} className={cn("flex h-12 w-14 items-center justify-center gap-0.5 rounded-md border", count === n ? "border-accent bg-accent-soft" : "border-line hover:bg-hover")} title={n === 1 ? "Une colonne" : `${n} colonnes`} aria-label={n === 1 ? "Une colonne" : `${n} colonnes`}>
                 {Array.from({ length: n }, (_, i) => <span key={i} className="h-7 flex-1 rounded-sm bg-line first:ml-1.5 last:mr-1.5" />)}
               </button>
             ))}

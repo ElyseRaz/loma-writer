@@ -6,6 +6,7 @@ import type { Editor } from "@tiptap/react";
 import { useLomaEditor } from "../editor/EditorProvider";
 import { loadContent } from "../editor/loadContent";
 import type { DocumentTemplate } from "../editor/templates";
+import { paperWarning } from "../services/printSections";
 import { baseName, FILTERS, nativeFileIO, pickFileToOpen, pickSavePath, printPage, writeTextFile } from "../services/files";
 import { exportHtml, exportText } from "../services/documentFormat";
 import {
@@ -192,7 +193,7 @@ export function DocumentActionsProvider({ children }: { children: ReactNode }) {
   const print = useCallback(() => {
     set({ view: "editor" });
     // Let the editor view mount before the print dialog snapshots the page.
-    setTimeout(() => void printPage().catch((e) => notify(`Impression impossible : ${errorMessage(e)}`, "error")), 150);
+    setTimeout(() => { const warning = paperWarning(); if (warning) notify(warning); void printPage().catch((e) => notify(`Impression impossible : ${errorMessage(e)}`, "error")); }, 150);
   }, [set, notify]);
 
   const quit = useCallback(

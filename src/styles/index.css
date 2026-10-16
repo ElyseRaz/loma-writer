@@ -398,9 +398,52 @@ select {
    layout is measured (.pg-measuring) they are ordinary blocks one column wide. */
 .paper .ProseMirror { position: relative; }
 .paper .ProseMirror:not(.pg-measuring) [data-col] { position: absolute; left: var(--col-x); top: var(--col-y); width: var(--col-w); margin-top: 0 !important; margin-bottom: 0 !important; --sec-l: 0px !important; --sec-r: 0px !important; box-sizing: border-box; }
-/* A paragraph that runs over several columns of a page is a small multi-column box, starting a few px down its first column. */
-.paper .ProseMirror:not(.pg-measuring) [data-col-split] { column-count: var(--col-m); column-gap: var(--col-gap); column-fill: auto; height: var(--col-h); }
-.paper .ProseMirror:not(.pg-measuring) [data-col-split]::before { content: ""; display: block; height: var(--col-off); }
+/* A block whose lines are shared between columns / pages keeps the box of its first run; the text of the other runs is moved with a
+   relative offset (inline spans, or table rows), so the caret, the selection and typing work where the text is drawn. */
+.paper .ProseMirror:not(.pg-measuring) [data-col-cut] { height: var(--col-h); }
+.paper .ProseMirror:not(.pg-measuring) .col-shift { position: relative; left: var(--sx); top: var(--sy); }
+/* WebKit ignores a relative offset on a table row: the cells carry it instead. */
+.paper .ProseMirror:not(.pg-measuring) tr.col-shift { position: static; left: auto; top: auto; }
+.paper .ProseMirror:not(.pg-measuring) tr.col-shift > td, .paper .ProseMirror:not(.pg-measuring) tr.col-shift > th { position: relative; left: var(--sx); top: var(--sy); }
+.paper .ProseMirror:not(.pg-measuring) .tableWrapper[data-col] { overflow: visible; }
+.paper .ProseMirror:not(.pg-measuring) .tableWrapper[data-col] > table { max-width: none; margin: 0; } /* the wrapper no longer collapses the table margin: it would push the rows down */
+/* The box of a table in columns still covers the rows' natural place, where other text may have moved: only its cells take clicks. */
+.paper .ProseMirror:not(.pg-measuring) [data-col-table], .paper .ProseMirror:not(.pg-measuring) [data-col-table] table { pointer-events: none; }
+.paper .ProseMirror:not(.pg-measuring) [data-col-table] td, .paper .ProseMirror:not(.pg-measuring) [data-col-table] th { pointer-events: auto; }
+/* Tables in columns: their rows are moved one by one, so the borders belong to the cells (separate model: the top and left edges are
+   painted as shadows, they come with the row wherever it goes). The heights stay those of the collapsed model. */
+.paper .ProseMirror [data-cols] table { border-collapse: separate; border-spacing: 0; }
+.paper .ProseMirror [data-cols] th, .paper .ProseMirror [data-cols] td { border-top-width: 0; border-left-width: 0; box-shadow: 0 calc(-1 * var(--tb-w, 1px)) 0 0 var(--tb-c, #000); }
+.paper .ProseMirror [data-cols] tr > :first-child { box-shadow: 0 calc(-1 * var(--tb-w, 1px)) 0 0 var(--tb-c, #000), calc(-1 * var(--tb-w, 1px)) 0 0 0 var(--tb-c, #000); }
+.paper .ProseMirror [data-cols][data-borders="horizontal"] tr > :first-child { box-shadow: 0 calc(-1 * var(--tb-w, 1px)) 0 0 var(--tb-c, #000); }
+.paper .ProseMirror [data-cols][data-borders="none"] th, .paper .ProseMirror [data-cols][data-borders="none"] td { box-shadow: inset 0 0 0 1px #e5e7eb; }
+.paper .ProseMirror [data-cols][data-borders="outer"] table { border: 0; }
+.paper .ProseMirror [data-cols][data-borders="outer"] th, .paper .ProseMirror [data-cols][data-borders="outer"] td { box-shadow: none; border-width: 0; }
+.paper .ProseMirror [data-cols][data-borders="outer"] tr > :first-child { box-shadow: calc(-1 * var(--tb-w, 1px)) 0 0 0 var(--tb-c, #000); }
+.paper .ProseMirror [data-cols][data-borders="outer"] tr:first-child > * { box-shadow: 0 calc(-1 * var(--tb-w, 1px)) 0 0 var(--tb-c, #000); }
+.paper .ProseMirror [data-cols][data-borders="outer"] tr > :last-child { border-right: var(--tb-w, 1px) solid var(--tb-c, #000); }
+.paper .ProseMirror [data-cols][data-borders="outer"] tr:last-child > * { border-bottom: var(--tb-w, 1px) solid var(--tb-c, #000); }
+@media print { .paper .ProseMirror [data-cols][data-borders="none"] th, .paper .ProseMirror [data-cols][data-borders="none"] td { box-shadow: none; } }
+/* A cell without borders draws none of the shadow edges either. */
+.paper .ProseMirror [data-cols] td[data-borderless], .paper .ProseMirror [data-cols] th[data-borderless] { box-shadow: none !important; }
+/* A table that starts a new column draws its top edge there, and the one that ends a column its bottom edge (outer-border tables). */
+.paper .ProseMirror [data-cols][data-borders="outer"] tr[data-col-top] > * { box-shadow: 0 calc(-1 * var(--tb-w, 1px)) 0 0 var(--tb-c, #000); }
+.paper .ProseMirror [data-cols][data-borders="outer"] tr[data-col-top] > :first-child { box-shadow: 0 calc(-1 * var(--tb-w, 1px)) 0 0 var(--tb-c, #000), calc(-1 * var(--tb-w, 1px)) 0 0 0 var(--tb-c, #000); }
+.paper .ProseMirror [data-cols][data-borders="outer"] tr[data-col-bottom] > * { border-bottom: var(--tb-w, 1px) solid var(--tb-c, #000); }
+/* A row taller than a column is shared line by line: its cells keep neither frame nor background (they would run past the column). */
+.paper .ProseMirror:not(.pg-measuring) .col-rowcut > td, .paper .ProseMirror:not(.pg-measuring) .col-rowcut > th { background: transparent !important; box-shadow: none !important; border-color: transparent !important; }
+/* The redrawn cells of a shared row: absolute boxes inside the first cell (its containing block), behind the text. */
+.paper .ProseMirror .col-rowframe-cell { position: absolute; box-sizing: border-box; }
+.paper .ProseMirror .col-rowframe { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: -1; pointer-events: none; }
+/* A list item shared over slots: its shaded / bordered paragraphs are redrawn run by run (frames), not painted over their whole natural height. */
+.paper .ProseMirror:not(.pg-measuring) li[data-col-cut] td, .paper .ProseMirror:not(.pg-measuring) li[data-col-cut] th { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+.paper .ProseMirror:not(.pg-measuring) li[data-col-cut] p { background: transparent !important; border-color: transparent !important; }
+/* The frame of a later run of a bordered / shaded paragraph (a widget behind the moved text). */
+.paper .ProseMirror .col-frame { position: absolute; left: 0; width: 100%; box-sizing: border-box; z-index: -1; pointer-events: none; }
+.paper .ProseMirror .col-frame-quote { border-left: 3px solid #2563eb; background: #f6f8fd; }
+/* Pictures in a column never exceed it (the picture keeps its proportions inside the smaller box). */
+.paper .ProseMirror .img-anchor:not([data-wrap="front"]):not([data-wrap="behind"]) > .img-box { max-width: var(--col-maxw, none); max-height: var(--col-maxh, none); }
+.paper .ProseMirror .img-anchor:not([data-wrap="front"]):not([data-wrap="behind"]) > .img-box > img { object-fit: contain; }
 /* Lists and quotes of a column section: their items / paragraphs are placed one by one, the container only passes them through. */
 .paper .ProseMirror:not(.pg-measuring) [data-col-box] { display: contents; }
 .paper .ProseMirror:not(.pg-measuring) [data-col-quote] { border-left: 3px solid #2563eb; padding: 0 1em; background: #f6f8fd; font-style: italic; color: #3f4a63; }

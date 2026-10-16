@@ -119,9 +119,12 @@ propre papier, orientation, marges, en-têtes et pieds de page.
   `.doc` passe par LibreOffice. Les sauts « page paire / impaire » de Word sont lus comme « page suivante » (avertissement).
 - **Numérotation** (Mise en page > N° de page, ou Insertion) : format (1, i, I, a, A) et « commencer à » par section ; sans réglage,
   la numérotation continue la section précédente. DOCX `w:pgNumType`, ODT `style:num-format` + `style:page-number` ; vérifié avec LibreOffice.
-- **Impression** : les sections de formats différents s'impriment chacune à leur taille (règles `@page` nommées, une copie de la pile
-  de pages par série de pages de même format : `src/services/printSections.ts`). Vérifié en PDF avec Chrome ; l'impression native
-  de WebKitGTK n'a pas été testée.
+- **Impression** : tous les documents passent par des copies de la pile de pages (`src/services/printSections.ts`) : un support par feuille
+  (une page chacun, nommée `@page psN` pour sa taille, un peu plus court que la feuille pour éviter une page vide), contenant une copie
+  allégée de la pile (seules les feuilles et les blocs proches sont copiés, les autres blocs sont remplacés par une boîte vide de même
+  hauteur ou supprimés). La pile en direct, épinglée à l'origine, n'aurait donné qu'une seule page. Vérifié en PDF Chrome **et dans
+  WebKitGTK** (`e2e/webkit.py` : impression réelle vers un PDF, une page par feuille). WebKitGTK ignore `@page { size }` : le papier est
+  celui de la boîte d'impression (A4 par défaut) ; sur un autre papier que celui du document, les feuilles ne coïncident plus avec les pages.
 - **Formes importées** : positionnées d'après la feuille de leur propre section (marges et largeur de cette section).
 
 ## Colonnes et saut continu
@@ -131,18 +134,47 @@ propre papier, orientation, marges, en-têtes et pieds de page.
 - **Colonnes** (Mise en page > Colonnes) : 2 à 6 colonnes égales, espace réglable, ligne entre les colonnes. Elles s'appliquent à la
   section du curseur ; pour des colonnes sur une partie de la page, insérer un saut continu avant et après.
 - **Moteur** : les blocs d'une section à colonnes sont mesurés à la largeur d'une colonne, puis placés en position absolue
-  (variables CSS `--col-x/y/w`) ; un espaceur occupe leur place dans le flux. Remplissage colonne après colonne, page après page ;
-  un paragraphe peut se couper entre deux colonnes d'une même page (boîte CSS multi-colonnes). Les **listes** sont découpées par
-  élément et les **citations** par paragraphe (le conteneur passe en `display: contents`, chaque élément est placé seul : la
-  numérotation continue d'une colonne à l'autre, la puce garde son retrait, le trait de citation est reporté sur chaque paragraphe).
-  Avant un saut continu, les colonnes de la dernière page sont **équilibrées** (recherche dichotomique de la hauteur minimale).
+  (variables CSS `--col-x/y/w`) ; un espaceur occupe leur place dans le flux. Remplissage colonne après colonne, page après page.
+  Le texte (paragraphes, éléments de liste, paragraphes de citation) est réparti **ligne par ligne** : le moteur renvoie des
+  *fragments* (`Placement.frags` : lignes `from..to`, page, colonne, y) respectant orphelines et veuves ; la boîte garde la hauteur du
+  premier fragment et chaque fragment suivant est une étendue de texte (`Decoration.inline`, classe `col-shift`) déplacée par un
+  décalage relatif (`--sx/--sy`) vers sa colonne ou sa page. Le texte reste un seul nœud : curseur, sélection et frappe fonctionnent
+  là où il est dessiné ; comme Chrome retrouve mal une position sous un décalage relatif, `view.posAtCoords` est complété
+  (`shiftedPosAtCoords`) pour les clics sur du texte déplacé.
+  Les **listes** sont découpées par élément et les **citations** par paragraphe (le conteneur passe en `display: contents`, chaque
+  élément est placé seul : la numérotation continue d'une colonne à l'autre, la puce garde son retrait, le trait de citation est
+  reporté sur chaque paragraphe). Les **tableaux** sont découpés par ligne : le tableau reste à la place de sa première ligne et
+  chaque ligne est décalée (`tr` en position relative) ; en colonnes, les bordures appartiennent aux cellules (modèle `separate`,
+  arêtes haute et gauche en `box-shadow`) pour suivre leur ligne. Les **images** sont ramenées à la taille d'une colonne.
+  Les colonnes de la dernière page sont **équilibrées** avant un saut continu et en fin de document (recherche dichotomique de la
+  hauteur minimale, y compris quand un paragraphe commence sur la page précédente).
 - **Saut de colonne** (Mise en page > Sauts, Ctrl+Maj+Entrée) : nœud `columnBreak` ; le texte suivant passe à la colonne suivante
   (page suivante après la dernière colonne). Hors section à colonnes il agit comme un saut de page. DOCX `w:br w:type="column"`, ODT
   `fo:break-after="column"`.
 - **Fichiers** : DOCX `w:type continuous` + `w:cols` ; ODT `text:section` + `style:columns` ; vérifié avec LibreOffice dans les deux sens.
   Colonnes de largeurs inégales : ramenées à des colonnes égales (avertissement).
-- **Limites** : un paragraphe ne se coupe pas d'une page à l'autre dans une section à colonnes (s'il ne tient pas dans le reste de
-  la page, il passe en entier sur la page suivante) ; un élément de liste, un tableau ou une image plus hauts qu'une colonne
-  débordent (les tableaux ne se coupent pas entre colonnes ; un tableau qui ne tient pas dans le reste d'une colonne passe à la
-  suivante) ; la dernière section à colonnes d'un document se remplit colonne par colonne sans équilibrage (comme Word) ;
-  l'impression avec colonnes est vérifiée en PDF Chrome (sections de tailles différentes), pas dans WebKitGTK ni Word.
+- **Unités à plusieurs blocs de texte** (élément de liste, ligne de tableau) : leurs lignes sont mesurées bloc par bloc puis fusionnées par
+  hauteur (`measureFlows`, `AtomRef.flows`) ; un élément de liste (même avec un tableau ou une liste imbriqués) se répartit comme un
+  paragraphe, une ligne de tableau plus haute qu'une colonne aussi (ses cellules sont redessinées, fond et bordure, derrière chaque fragment : widget `col-rowframe` dans la première cellule ; les cellules d'origine sont rendues transparentes, classe `col-rowcut`).
+- **Cadre et fond** d'un paragraphe ou d'une citation : un cadre (widget `col-frame`, mêmes couleur, bordure, retrait) est dessiné derrière
+  chaque fragment suivant. Tableau à bordure « extérieure » : bord haut/bas tracé sur les lignes qui commencent/finissent une colonne.
+- **Équilibrage** : à la ligne près (le texte se coupe entre colonnes), sans les ajustements typographiques de Word.
+- **En-tête de tableau** : quand un tableau continue en haut d'une colonne, le moteur réserve la hauteur des lignes d'en-tête (`Placement.header`,
+  `Atom.repeat` / `tableId`) et une copie d'affichage (`col-header`, table absolue dans la première cellule de la ligne) est dessinée au-dessus.
+- **Puce coupée** : les paragraphes ombrés ou encadrés d'un élément de liste sont redessinés par fragment (`unitFrame`, d'après `AtomRef.flows[].look`) ;
+  leur fond d'origine est rendu transparent.
+- **Cellule sur plusieurs lignes (`rowspan`)** : la ligne qui porte la cellule et les lignes qu'elle couvre forment un seul bloc (un atome aussi
+  haut que le groupe, `AtomRef.groupRows`) et se déplacent ensemble ; le groupe ne se coupe pas entre colonnes. **Cellule sans bordure** (`data-borderless`)
+  : elle ne dessine pas non plus les arêtes en ombre.
+- **Impression, grands tableaux** : un tableau de plus de 40 lignes est copié ligne par ligne pour chaque feuille (seules les lignes proches
+  sont copiées, les autres sont remplacées par une ligne vide de même hauteur) ; vérifié dans WebKitGTK sur 58 pages (1500 lignes), une
+  page par feuille et première/dernière ligne sur les bonnes pages (pas de dérive).
+- **Papier et marges de l'impression** : WebKitGTK met le contenu à l'échelle de la largeur imprimable seulement. Un document dont la hauteur
+  de feuille dépasse celle de la zone imprimable (document A4 sur papier Letter) est coupé : on ne peut pas connaître la zone imprimable
+  depuis la page (les requêtes média et `vh` y renvoient la taille de la fenêtre, essayé). L'application prévient avant l'impression (une fois par
+  session pour un document A4, à chaque fois pour un autre format). Marges d'imprimante jusqu'à 5 mm sur A4 : sans effet (testé,
+  `LOMA_WK_MARGIN=5`).
+- **Limites** : bordures de cellule par côté ou en pointillé : le modèle du document ne les décrit pas (seuls le style du tableau et « sans bordure »
+  existent) ; la mise en page et l'impression avec colonnes sont vérifiées dans Chrome et dans WebKitGTK, pas dans Word ; un en-tête de tableau est
+  une ligne de cellules d'en-tête (`th`, bouton « ligne d'en-tête ») en tête du tableau (au plus 40 % de la hauteur d'une colonne) ; les
+  tableaux imbriqués dans un élément de liste qui se coupe sont redessinés à ±2 px.

@@ -153,6 +153,102 @@ await page.keyboard.press("Control+Shift+Enter");
 await settle();
 ok((await run(() => { let n = 0; window.__lomaEditor.state.doc.descendants((x) => { if (x.type.name === "columnBreak") n++; }); return n; })) >= 2, "Ctrl+Shift+Enter is wired (no crash)");
 
+// --- text, tables and pictures that run on over columns and pages ---
+const rowsHtml = Array.from({ length: 40 }, (_, r) => `<tr><td><p>a${r}</p></td><td><p>b${r}</p></td></tr>`).join("");
+const tiny = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="3000"><rect width="1200" height="3000" fill="#2563eb"/></svg>');
+await run((h) => window.__lomaEditor.commands.setContent(h), `<p>Intro. ${lorem}</p><p>LONG ${lorem.repeat(60)}</p><table><tbody>${rowsHtml}</tbody></table><p>Après. ${lorem}</p><ul><li><p>GROSSE ${lorem.repeat(30)}</p></li></ul><p>Fin. ${lorem}</p>`);
+await menu("Colonnes", "Une");
+await settle();
+await menu("Colonnes", "Deux");
+await page.waitForTimeout(1200);
+const nPages = await pages();
+ok(nPages >= 4 && nPages <= 7, `the long content fills several pages of two columns (${nPages})`);
+const shifts = await run(() => document.querySelectorAll(".ProseMirror .col-shift").length);
+ok(shifts > 5, `lines and rows are moved to their own column or page (${shifts} moved parts)`);
+const cross = await run(() => {
+  const st = document.querySelector(".page-stack"); const k = st.getBoundingClientRect().width / st.offsetWidth; const s0 = st.getBoundingClientRect();
+  const sheets = [...document.querySelectorAll(".page-sheet")].map((e) => ({ top: (e.getBoundingClientRect().top - s0.top) / k, h: e.offsetHeight }));
+  const pg = (y) => sheets.findIndex((s) => y >= s.top && y < s.top + s.h);
+  const pagesOf = new Set(); const cols = new Set();
+  for (const sp of document.querySelectorAll(".ProseMirror .col-shift")) { for (const r of sp.getClientRects()) { const y = (r.top - s0.top) / k; pagesOf.add(pg(y)); cols.add(Math.round((r.left - s0.left) / k / 100)); } }
+  return { pages: [...pagesOf].sort(), cols: [...cols].length };
+});
+ok(cross.pages.length >= 2, `moved text lands on several pages (${cross.pages})`);
+const aBig = await run(() => window.__lomaAudit());
+ok(aBig.problems.length === 0, "every character stays inside its page and column", aBig.problems.slice(0, 3).join(" | "));
+// a click on moved text puts the caret there; typing goes into the right paragraph
+const hit = await run(() => {
+  const e = window.__lomaEditor; const sp = [...document.querySelectorAll(".ProseMirror p .col-shift")][3]; if (!sp) return null;
+  const tn = (function f(n) { for (const c of n.childNodes) { if (c.nodeType === 3 && c.length > 6) return c; const r = f(c); if (r) return r; } return null; })(sp);
+  sp.scrollIntoView({ block: "start" });
+  const at = Math.floor(tn.length / 2);
+  const range = document.createRange(); range.setStart(tn, at); range.setEnd(tn, at + 1);
+  const r = range.getClientRects()[0];
+  const want = e.view.posAtDOM(tn, at);
+  const got = e.view.posAtCoords({ left: r.left + 1, top: r.top + r.height / 2 });
+  return { want, got: got?.pos, y: r.top };
+});
+ok(hit && Math.abs(hit.want - hit.got) <= 1, `a click on moved text finds its position (${hit && hit.want}/${hit && hit.got} at y=${hit && Math.round(hit.y)})`);
+await run(() => { const e = window.__lomaEditor; const sp = [...document.querySelectorAll(".ProseMirror p .col-shift")][3]; const tn = (function f(n) { for (const c of n.childNodes) { if (c.nodeType === 3 && c.length > 6) return c; const r = f(c); if (r) return r; } return null; })(sp); e.commands.focus(); e.commands.setTextSelection(e.view.posAtDOM(tn, 2)); });
+await page.keyboard.type("QQQ");
+await page.waitForTimeout(900);
+ok((await run(() => window.__lomaEditor.getText())).includes("QQQ"), "typing in moved text works");
+ok((await run(() => window.__lomaAudit())).problems.length === 0, "and the layout is still valid");
+// balanced at the end of the document
+const lastPageCols = await run(() => { const st = document.querySelector(".page-stack"); const k = st.getBoundingClientRect().width / st.offsetWidth; const s0 = st.getBoundingClientRect(); const sheets = [...document.querySelectorAll(".page-sheet")]; const last = sheets[sheets.length - 1].getBoundingClientRect(); const ends = [0, 0]; for (const el of document.querySelectorAll(".ProseMirror [data-col], .ProseMirror .col-shift")) for (const r of el.getClientRects()) { if (r.top < last.top) continue; const c = (r.left - s0.left) / k < 400 ? 0 : 1; ends[c] = Math.max(ends[c], (r.bottom - last.top) / k); } return ends; });
+ok(lastPageCols[0] > 0 && lastPageCols[1] > 0 && Math.abs(lastPageCols[0] - lastPageCols[1]) < 300, `the last page is balanced (${lastPageCols.map(Math.round)})`);
+
+// the picture (1200 x 3000 px) is brought down to the column
+await run((h) => window.__lomaEditor.commands.setContent(h), `<p>Avant.</p><p><img src="${tiny}"></p><p>Après.</p>`);
+await settle();
+const imgBox = await run(() => { const b = document.querySelector(".ProseMirror .img-box"); if (!b) return null; const r = b.getBoundingClientRect(); const st = document.querySelector(".page-stack"); const k = st.getBoundingClientRect().width / st.offsetWidth; return { w: r.width / k, h: r.height / k }; });
+ok(imgBox && imgBox.w <= 290 && imgBox.h <= 1000, `a picture taller than a column is brought down to it (${imgBox && Math.round(imgBox.w)}x${imgBox && Math.round(imgBox.h)})`);
+// --- a row taller than a column, a list item holding a table, framed paragraphs ---
+await run((h) => window.__lomaEditor.commands.setContent(h), `<p>Intro. ${lorem}</p><table><tbody><tr><td><p>GEANTE ${lorem.repeat(45)}</p></td><td><p>court</p></td></tr></tbody></table><ul><li><p>Puce. ${lorem}</p><table><tbody><tr><td><p>x</p></td><td><p>y</p></td></tr></tbody></table><p>Après. ${lorem.repeat(25)}</p></li></ul><p data-shading="#fecaca">ENCADRE ${lorem.repeat(30)}</p><p>Fin. ${lorem}</p>`);
+await menu("Colonnes", "Une");
+await settle();
+await menu("Colonnes", "Deux");
+await page.waitForTimeout(1500);
+ok((await pages()) >= 5, `the giant row and the long items spread over pages (${await pages()})`);
+ok((await run(() => document.querySelectorAll(".ProseMirror .col-rowcut").length)) >= 1, "the giant row is shared line by line");
+const aRow = await run(() => window.__lomaAudit());
+ok(aRow.problems.length === 0, "every character stays inside its page and column", aRow.problems.slice(0, 3).join(" | "));
+ok((await run(() => document.querySelectorAll(".ProseMirror p > .col-frame").length)) >= 2, "the shaded paragraph keeps its background on every run");
+const frameOk = await run(() => [...document.querySelectorAll(".ProseMirror p > .col-frame")].every((f) => { const r = f.getBoundingClientRect(); return r.width > 100 && r.height > 20 && getComputedStyle(f).backgroundColor !== "rgba(0, 0, 0, 0)"; }));
+ok(frameOk, "and the frames have the paragraph's colour and size");
+const rowFrames = await run(() => [...document.querySelectorAll(".ProseMirror .col-rowframe")].map((b) => b.children.length));
+ok(rowFrames.length >= 2 && rowFrames.every((n) => n === 2), `the giant row redraws its two cells on every run (${rowFrames.length} runs)`);
+
+// --- repeated table header, shaded paragraph inside a list item that is cut ---
+const bodyRows = Array.from({ length: 60 }, (_, r) => `<tr><td><p>a${r}</p></td><td><p>b${r}</p></td></tr>`).join("");
+await run((h) => window.__lomaEditor.commands.setContent(h), `<p>Intro. ${lorem}</p><table><tbody><tr><th><p>ENTETE1</p></th><th><p>ENTETE2</p></th></tr>${bodyRows}</tbody></table><ul><li><p data-shading="#fecaca">PUCE ${lorem.repeat(40)}</p></li></ul><p>Fin. ${lorem}</p>`);
+await menu("Colonnes", "Une");
+await settle();
+await menu("Colonnes", "Deux");
+await page.waitForTimeout(1500);
+const heads = await run(() => { const st = document.querySelector(".page-stack"); const k = st.getBoundingClientRect().width / st.offsetWidth; const s0 = st.getBoundingClientRect(); return [...document.querySelectorAll(".ProseMirror .col-header")].map((t) => { const r = t.getBoundingClientRect(); return { y: Math.round((r.top - s0.top) / k), h: Math.round(r.height / k), txt: t.textContent }; }); });
+ok(heads.length >= 2 && heads.every((h) => h.txt.includes("ENTETE1") && h.h > 20), `the header is repeated at the top of each column the table goes on in (${heads.length} copies)`);
+const firstRows = await run(() => { const st = document.querySelector(".page-stack"); const k = st.getBoundingClientRect().width / st.offsetWidth; const s0 = st.getBoundingClientRect(); return [...document.querySelectorAll(".ProseMirror .col-header")].map((t) => { const hr = t.getBoundingClientRect(); const td = t.closest("td").getBoundingClientRect(); return Math.round(td.top - hr.bottom); }); });
+ok(firstRows.every((d) => Math.abs(d) <= 2), `each copy sits right above its row (${firstRows})`);
+const uf = await run(() => [...document.querySelectorAll(".ProseMirror li > .col-frame")].length);
+ok(uf >= 2, `the shaded paragraph of a cut list item is framed on every run (${uf} frames)`);
+ok((await run(() => window.__lomaAudit())).problems.length === 0, "and the layout is valid", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
+
+// --- a cell spanning rows moves with the rows it covers ---
+const spanRows = Array.from({ length: 24 }, (_, r) => `<tr><td><p>a${r}</p></td><td><p>b${r}</p></td></tr>`).join("");
+await run((h) => window.__lomaEditor.commands.setContent(h), `<table><tbody>${spanRows}<tr><td rowspan="3"><p>SPANCELL</p></td><td><p>s1</p></td></tr><tr><td><p>s2</p></td></tr><tr><td><p>s3</p></td></tr>${spanRows.replace(/a(\d+)/g, "z$1")}</tbody></table>`);
+await menu("Colonnes", "Une");
+await settle();
+await menu("Colonnes", "Deux");
+await page.waitForTimeout(1500);
+const spanOk = await run(() => {
+  const at = (txt) => { const w = document.createTreeWalker(document.querySelector(".ProseMirror"), NodeFilter.SHOW_TEXT); for (let n = w.nextNode(); n; n = w.nextNode()) if (n.data.trim() === txt) { const r = document.createRange(); r.selectNodeContents(n); const b = r.getBoundingClientRect(); return { x: b.left, y: b.top }; } return null; };
+  const s = at("SPANCELL"), a = at("s1"), b = at("s3");
+  return s && a && b ? { dxA: Math.abs(a.x - s.x), dyA: a.y - s.y, dyB: b.y - s.y } : null;
+});
+ok(spanOk && spanOk.dxA > 20 && spanOk.dxA < 300 && spanOk.dyB >= 0 && spanOk.dyB < 150, `the three rows covered by a spanning cell stay beside it (${JSON.stringify(spanOk)})`);
+ok((await run(() => window.__lomaAudit())).problems.length === 0, "and the layout is valid", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
+
 ok(errors.length === 0, "no page errors", errors.join(" | "));
 await browser.close();
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nAll column checks passed");

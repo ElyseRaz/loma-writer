@@ -45,7 +45,7 @@ window.__lomaAudit = function () {
       }
     }
   });
-  root.querySelectorAll("tr").forEach((tr, n) => { if (!tr.classList.contains("pg-spacer")) { const r = tr.getBoundingClientRect(); check(`TR#${n}`, r.top, r.bottom); } });
+  root.querySelectorAll("tr").forEach((tr, n) => { if (!tr.classList.contains("pg-spacer") && !tr.classList.contains("col-rowcut") && !tr.closest("li[data-col-cut]")) { const r = (tr.classList.contains("col-shift") && tr.cells[0] ? tr.cells[0] : tr).getBoundingClientRect(); check(`TR#${n}`, r.top, r.bottom); } });
   root.querySelectorAll("img:not(.ProseMirror-separator)").forEach((im, n) => { const r = im.getBoundingClientRect(); check(`IMG#${n}`, r.top, r.bottom); });
   // headings must not end a page
   root.querySelectorAll("h1, h2, h3").forEach((h, n) => {

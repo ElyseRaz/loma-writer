@@ -12,6 +12,8 @@ export type MenuEntry =
       disabled?: boolean;
       /** Not implemented yet: shown disabled with a "Bientôt" tag. */
       soon?: boolean;
+      /** Tooltip and accessible description of the entry (short: it is only shown on hover). */
+      title?: string;
       /** Font preview for font pickers. */
       fontFamily?: string;
       onSelect?: () => void;
@@ -28,7 +30,8 @@ export function MenuList({ items, onClose }: { items: MenuEntry[]; onClose: () =
             key={item.label}
             role="menuitem"
             disabled={item.disabled || item.soon}
-            title={item.soon ? `${item.label} — bientôt disponible` : undefined}
+            title={item.soon ? `${item.label} — bientôt disponible` : item.title}
+            aria-description={item.soon ? undefined : item.title}
             onClick={() => {
               onClose();
               item.onSelect?.();

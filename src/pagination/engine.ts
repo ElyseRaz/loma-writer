@@ -1,4 +1,4 @@
-import type { Atom, Band, Placement, PageBreak, PageGeometry, PaginationResult, Sheet } from "./model";
+import type { Atom, Band, Fragment, Placement, PageBreak, PageGeometry, PaginationResult, Sheet } from "./model";
 
 export interface EngineOptions {
   /** Minimum lines of a paragraph left at the bottom of a page. */
@@ -83,10 +83,13 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
     forcePage = -1;
     if (atoms[i0].breakBefore && y0 - contentTop(p0) > EPS) { p0 += 1; y0 = contentTop(p0); }
 
-    interface Flow { pl: Array<Placement | null>; endPage: number; endY: number; overflow: boolean; lastPageFrom: number; used: number }
+    interface Flow { pl: Array<Placement | null>; endPage: number; endY: number; overflow: boolean; lastPageFrom: number; lastPageLine: number; used: number }
 
-    /** One pass over atoms k0..k1: `fixed` (balancing) gives every column of the first page that height. */
-    const flow = (k0: number, k1: number, pStart: number, yStart: number, fixed: number | null): Flow => {
+    /**
+     * One pass over atoms k0..k1: `fixed` (balancing) gives every column of the first page that height; `line0` starts the first
+     * atom at that line (its earlier lines are already placed on a previous page).
+     */
+    const flow = (k0: number, k1: number, pStart: number, yStart: number, fixed: number | null, line0 = 0): Flow => {
       const pl: Array<Placement | null> = [];
       let p = pStart;
       let c = 0;
@@ -94,99 +97,128 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
       let firstInCol = true;
       let overflow = false;
       let lastPageFrom = k0;
+      let lastPageLine = line0;
       let maxUsed = 0; // lowest point used by any column of the current page
       const colTop = (page: number) => (page === pStart ? yStart : contentTop(page));
       const cap = (page: number) => (page === pStart && fixed !== null ? fixed : contentTop(page) + H - colTop(page));
-      const next = () => { c += 1; if (c >= N) { c = 0; p += 1; maxUsed = 0; lastPageFrom = -1; } y = 0; firstInCol = true; };
+      const newPage = (k: number, line: number) => { p += 1; c = 0; y = 0; firstInCol = true; maxUsed = 0; lastPageFrom = k; lastPageLine = line; };
+      const next = (k: number, line: number) => { c += 1; if (c >= N) newPage(k, line); else { y = 0; firstInCol = true; } };
       for (let k = k0; k < k1; k++) {
         const a = atoms[k];
-        if (lastPageFrom === -1) lastPageFrom = k;
-        if (a.kind === "break") { pl.push({ page: p, x: colX(c), y: colTop(p) + y, width: cw }); if (!(c === 0 && y === 0 && firstInCol)) { p += 1; c = 0; y = 0; firstInCol = true; maxUsed = 0; lastPageFrom = -1; } continue; }
-        if (a.kind === "colbreak") { pl.push({ page: p, x: colX(c), y: colTop(p) + y, width: cw }); if (!(c === 0 && firstInCol)) next(); continue; }
-        if (a.breakBefore && !(c === 0 && firstInCol)) { p += 1; c = 0; y = 0; firstInCol = true; maxUsed = 0; lastPageFrom = k; }
-        const h = a.bottom - a.top;
+        const startLine = k === k0 ? line0 : 0;
+        if (lastPageFrom === -1) { lastPageFrom = k; lastPageLine = 0; }
+        if (a.kind === "break") { pl.push({ page: p, x: colX(c), y: colTop(p) + y, width: cw }); if (!(c === 0 && y === 0 && firstInCol)) newPage(k + 1, 0); continue; }
+        if (a.kind === "colbreak") { pl.push({ page: p, x: colX(c), y: colTop(p) + y, width: cw }); if (!(c === 0 && firstInCol)) next(k + 1, 0); continue; }
+        if (a.breakBefore && !(c === 0 && firstInCol) && startLine === 0) newPage(k, 0);
+        // Text is shared between slots line by line; so is a table row taller than a whole column (it could not fit anywhere).
+        const splittable = a.kind === "text" || (a.kind === "row" && a.bottom - a.top > H);
+        const lines = splittable && a.lines && (!a.keepLines || startLine > 0) ? a.lines() : null;
+        const h = lines && startLine > 0 ? linesBottom(lines, startLine, lines.length) : a.bottom - a.top;
         let placed: Placement | null = null;
-        for (let guard = 0; guard < 4 * N + 4 && !placed; guard++) {
+        for (let guard = 0; guard < 4 * N + 6 && !placed; guard++) {
           const gap = firstInCol || k === k0 ? 0 : Math.max(0, a.top - atoms[k - 1].bottom);
           const room = cap(p) - y;
-          let need = gap + h;
+          // A table that goes on at the top of a column repeats its header rows there: room is kept above the row.
+          const head = firstInCol && startLine === 0 && (a.repeat ?? 0) > 0 && a.repeat! <= 0.4 * H && k > 0 && atoms[k - 1].kind === "row" && atoms[k - 1].tableId === a.tableId ? a.repeat! : 0;
+          let need = gap + h + head;
           // A heading must keep the start of what follows with it.
           if (a.keepWithNext && k + 1 < k1 && !firstInCol) {
             const n = atoms[k + 1];
             let follow = n.bottom - n.top;
             if (n.kind === "text" && n.lines) { const ls = n.lines(); if (ls.length > orphans) follow = ls[orphans - 1].bottom - n.top; }
-            need = gap + h + Math.max(0, n.top - a.bottom) + follow;
+            need = gap + h + head + Math.max(0, n.top - a.bottom) + follow;
           }
           if (need <= room + EPS) {
-            placed = { page: p, x: colX(c), y: colTop(p) + y + gap, width: cw };
-            y += gap + h;
+            placed = startLine > 0
+              ? { page: p, x: colX(c), y: colTop(p) + y, width: cw, frags: [{ from: startLine, to: lines!.length, page: p, x: colX(c), y: colTop(p) + y }] }
+              : { page: p, x: colX(c), y: colTop(p) + y + gap + head, width: cw, ...(head ? { header: head } : {}) };
+            y += gap + h + head;
             firstInCol = false;
-          } else {
-            // Split a paragraph over the columns that are left on this page.
-            const lines = a.kind === "text" && a.lines && !a.keepLines ? a.lines() : null;
-            if (lines && lines.length >= orphans + widows && c < N - 1) {
-              const total = lines.length;
-              let idx = 0;
-              let col = c;
-              let used = y + gap;
-              let ok = true;
-              let lastCols = 1;
-              let endUsed = 0;
-              while (ok) {
-                const capacity = cap(p) - used;
-                let kk = idx;
-                while (kk < total && linesBottom(lines, idx, kk + 1) <= capacity + EPS) kk++;
-                if (kk >= total) { endUsed = linesBottom(lines, idx, total); break; }
-                if (col === N - 1) { ok = false; break; }
-                let first = kk;
-                if (total - first < widows) first = total - widows;
-                if (first - idx < orphans) { ok = false; break; }
-                idx = first;
-                col += 1;
-                lastCols += 1;
-                used = 0;
-              }
-              if (ok) {
-                const m = lastCols;
-                placed = { page: p, x: colX(c), y: colTop(p), width: m * cw + (m - 1) * cols.gap, split: { columns: m, gap: cols.gap, offset: y + gap, height: cap(p) } };
-                c += m - 1;
-                y = endUsed;
-                firstInCol = false;
-                break;
-              }
-            }
-            if (firstInCol) { // taller than a whole column and alone in it: let it overflow
-              placed = { page: p, x: colX(c), y: colTop(p) + y, width: cw };
-              overflow = true;
-              y += h;
-              firstInCol = false;
-            } else next();
+            break;
           }
+          // Lines that do not all fit go on, column after column and page after page (orphans and widows respected).
+          if (lines && lines.length - startLine >= 2) {
+            const total = lines.length;
+            const frags: Fragment[] = [];
+            const used: number[] = []; // bottom of each fragment, from the top of its column
+            const base = y + gap;
+            let idx = startLine;
+            let sp = p;
+            let sc = c;
+            let ok = true;
+            while (idx < total) {
+              const first = frags.length === 0;
+              const top = first ? base : 0;
+              const capacity = cap(sp) - top;
+              let n = 0;
+              while (idx + n < total && linesBottom(lines, idx, idx + n + 1) <= capacity + EPS) n++;
+              const at = { page: sp, x: colX(sc), y: first ? colTop(sp) + base : colTop(sp) };
+              if (idx + n >= total) { frags.push({ from: idx, to: total, ...at }); used.push(top + linesBottom(lines, idx, total)); break; }
+              if (total - (idx + n) < widows) n = total - idx - widows;
+              const minHere = idx === 0 ? orphans : 1;
+              if (n < minHere) {
+                if (first && !firstInCol) { ok = false; break; } // not here: try the next column
+                n = Math.max(1, Math.min(minHere, total - idx - 1)); // a fresh column too short: take what is required anyway
+                overflow = true;
+              }
+              frags.push({ from: idx, to: idx + n, ...at });
+              used.push(top + linesBottom(lines, idx, idx + n));
+              idx += n;
+              sc += 1;
+              if (sc >= N) { sc = 0; sp += 1; }
+            }
+            if (ok) {
+              const last = frags[frags.length - 1];
+              placed = { page: frags[0].page, x: frags[0].x, y: frags[0].y, width: cw, frags };
+              if (last.page !== p) {
+                maxUsed = 0;
+                lastPageFrom = k;
+                lastPageLine = frags.find((f) => f.page === last.page)!.from;
+              }
+              frags.forEach((f, i) => { if (f.page === last.page) maxUsed = Math.max(maxUsed, used[i]); });
+              p = last.page;
+              c = Math.round(last.x / (cw + cols.gap));
+              y = used[used.length - 1];
+              firstInCol = false;
+              break;
+            }
+          }
+          if (firstInCol) { // taller than a whole column and alone in it: let it overflow
+            placed = { page: p, x: colX(c), y: colTop(p) + y, width: cw };
+            overflow = true;
+            y += h;
+            firstInCol = false;
+          } else next(k, startLine);
         }
         if (!placed) { placed = { page: p, x: colX(c), y: colTop(p), width: cw }; overflow = true; }
         pl.push(placed);
         maxUsed = Math.max(maxUsed, y);
       }
-      return { pl, endPage: p, endY: colTop(p) + maxUsed, overflow, lastPageFrom, used: maxUsed };
+      return { pl, endPage: p, endY: colTop(p) + maxUsed, overflow, lastPageFrom, lastPageLine, used: maxUsed };
     };
 
     let res = flow(i0, i1, p0, y0, null);
-    // Before a continuous section break the columns of the last page are balanced (the shortest height that still fits).
-    const followedByContinuous = i1 < atoms.length && atoms[i1].kind === "section" && !!atoms[i1].continuous;
-    if (followedByContinuous && !res.overflow && res.lastPageFrom >= 0) {
+    // Before a continuous section break, and at the end of the document, the columns of the last page are balanced (the shortest
+    // height that still fits).
+    const balance = i1 >= atoms.length || (atoms[i1].kind === "section" && !!atoms[i1].continuous);
+    if (balance && !res.overflow && res.lastPageFrom >= 0) {
       const pLast = res.endPage;
       const kFrom = res.lastPageFrom;
+      const lineFrom = res.lastPageLine;
       const topLast = pLast === p0 ? y0 : contentTop(pLast);
       let hi = contentTop(pLast) + H - topLast;
       let lo = Math.max(1, (res.endY - topLast) / N);
       let best: Flow | null = null;
       for (let it = 0; it < 14 && hi - lo > 1; it++) {
         const mid = (lo + hi) / 2;
-        const trial = flow(kFrom, i1, pLast, topLast, mid);
+        const trial = flow(kFrom, i1, pLast, topLast, mid, lineFrom);
         if (!trial.overflow && trial.endPage === pLast) { best = trial; hi = mid; } else lo = mid;
       }
       if (best) {
-        res = { ...res, pl: [...res.pl.slice(0, kFrom - i0), ...best.pl], endY: best.endY, endPage: pLast, used: best.used };
+        // An atom that began on an earlier page keeps its first fragments; the balanced ones replace the rest.
+        const before = res.pl[kFrom - i0];
+        const head = lineFrom > 0 && before?.frags ? { ...before, frags: [...before.frags.filter((f) => f.from < lineFrom), ...(best.pl[0]?.frags ?? [])] } : best.pl[0];
+        res = { ...res, pl: [...res.pl.slice(0, kFrom - i0), head, ...best.pl.slice(1)], endY: best.endY, endPage: pLast, used: best.used };
       }
     }
 

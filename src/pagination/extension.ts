@@ -3,7 +3,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { Editor } from "@tiptap/react";
 import { paginate } from "./engine";
-import { collectAtoms } from "./measure";
+import { collectAtoms, FRAME_PROPS, type AtomRef } from "./measure";
 import type { Band, PageGeometry, Sheet } from "./model";
 
 export interface PaginationState {
@@ -169,6 +169,10 @@ export const Pagination = Extension.create({
               immediate || now - firstAt > MAX_WAIT ? 0 : QUIET_MS,
             );
           };
+          // The browser maps a click on text moved with a relative offset (columns) through the unmoved line boxes: look the character up
+          // in the lines as they are drawn instead.
+          const original = view.posAtCoords.bind(view);
+          view.posAtCoords = (coords) => shiftedPosAtCoords(view, coords) ?? original(coords);
           const onLoad = () => schedule(true); // images change heights once decoded
           view.dom.addEventListener("load", onLoad, true);
           void document.fonts?.ready.then(() => schedule(true));
@@ -179,6 +183,7 @@ export const Pagination = Extension.create({
               else if (!v.state.doc.eq(prev.doc)) schedule();
             },
             destroy() {
+              view.posAtCoords = original;
               clearTimeout(timer);
               cancelAnimationFrame(raf);
               cancelAnimationFrame(verifyRaf);
@@ -190,6 +195,175 @@ export const Pagination = Extension.create({
     ];
   },
 });
+
+
+/** A display-only widget (frames, header copies): never takes the selection or the clicks. */
+function overlayWidget(at: number, side: number, key: string, build: () => HTMLElement): Decoration {
+  return Decoration.widget(at, build, { side, key: `pg:${key}`, kind: "frame", spacer: 0, target: 0, ignoreSelection: true, stopEvent: () => true });
+}
+/** Key part for a position or a size: rounded, so two layouts that look the same share a widget. */
+const fk = (...n: number[]) => n.map((v) => v.toFixed(1)).join(":");
+
+/** An absolutely positioned, non-editable, hidden-from-assistive-tech box. */
+function makeFrame(tag: "span" | "div", className: string, css: string): HTMLElement {
+  const el = document.createElement(tag);
+  el.className = className;
+  el.setAttribute("aria-hidden", "true");
+  el.contentEditable = "false";
+  el.style.cssText = css;
+  return el;
+}
+const boxCss = (left: number, top: number, width: number | null, height: number) => `left:${+left.toFixed(2)}px;top:${+top.toFixed(2)}px;${width === null ? "" : `width:${+width.toFixed(2)}px;`}height:${+height.toFixed(2)}px`;
+const paintCss = (c: { bg: string; border: string }) => `background:${c.bg};${c.border ? `border:${c.border};` : ""}`;
+
+/** Inline spans that move the later runs of lines of a block to their own column or page (and the frames behind them). */
+function fragmentDecos(atom: import("./model").Atom, ref: import("./measure").AtomRef, pl: import("./model").Placement, pos: number, nodeSize: number, sub: (pages: number) => string, framed: boolean, rowCells?: AtomRef["cells"]): Decoration[] {
+  const cut = pl.frags;
+  if (!cut || cut.length < 2) return [];
+  const lines = atom.lines?.() ?? [];
+  const flows = ref.flows ?? [{ end: pos + nodeSize - 1, starts: ref.lineStarts as Array<number | undefined>, extent: [] }];
+  const out: Decoration[] = [];
+  cut.forEach((f, k) => {
+    if (!lines[f.from]) return;
+    // A table row shared over slots: its cells are redrawn (background, border) for each run, behind the text, from the first cell.
+    if (rowCells?.length) {
+      const top = k === 0 ? 0 : f.y - pl.y;
+      const h = lines[f.to - 1].bottom - (k === 0 ? atom.top : lines[f.from].top);
+      const dxk = k === 0 ? 0 : f.x - pl.x;
+      out.push(overlayWidget(pos + 2, -3, `rowframe:${pos}:${k}:${fk(dxk, top, h)}:${rowCells.map((c) => `${c.left.toFixed(1)},${c.width.toFixed(1)},${c.bg},${c.border}`).join("|")}`, () => rowFrames(rowCells, dxk, top, h)));
+    }
+    // Blocks with a background or a border inside a list item: their frame is redrawn for every run (inside the unit's own box).
+    if (!rowCells) {
+      const topRel = k === 0 ? 0 : f.y - pl.y;
+      const base = k === 0 ? atom.top : lines[f.from].top;
+      const dxk = k === 0 ? 0 : f.x - pl.x;
+      flows.forEach((flow, fi) => {
+        if (!flow.look) return;
+        let top = Infinity;
+        let bottom = -Infinity;
+        for (let i = f.from; i < f.to; i++) { const e = flow.extent[i]; if (e) { top = Math.min(top, e.top); bottom = Math.max(bottom, e.bottom); } }
+        if (bottom <= top) return;
+        const t = topRel + (top - base);
+        const h = bottom - top;
+        out.push(overlayWidget(pos + 1, -3, `uframe:${pos}:${k}:${fi}:${fk(dxk, t, h, flow.look!.left, flow.look!.width)}:${flow.look!.css}`, () => unitFrame(flow.look!, dxk, t, h)));
+      });
+    }
+    // Cells of a table inside a list item: the part of each cell that falls in this run is drawn again at its place.
+    if (!rowCells && ref.tdBoxes?.length) {
+      const topRel = k === 0 ? 0 : f.y - pl.y;
+      const base = k === 0 ? atom.top : lines[f.from].top;
+      const end = lines[f.to - 1].bottom;
+      const dxk = k === 0 ? 0 : f.x - pl.x;
+      ref.tdBoxes.forEach((c, ci) => {
+        // The part of the cell in this run. The lines stop above the cell's padding and border: when the cell ends here, the frame goes on to its bottom.
+        const top = Math.max(c.top, base);
+        const bottom = c.bottom <= end + 10 ? c.bottom : Math.min(c.bottom, end);
+        if (bottom - top < 1) return;
+        const t = Math.round((topRel + (top - base)) * 2) / 2;
+        const h = Math.max(1, Math.round((bottom - top) * 2) / 2);
+        out.push(overlayWidget(pos + 1, -3, `cframe:${pos}:${k}:${ci}:${fk(dxk, t, h, c.left, c.width)}:${c.bg}:${c.border}`, () => cellFrame(c, dxk, t, h)));
+      });
+    }
+    if (k === 0) return;
+    const nextFrom = k + 1 < cut.length ? cut[k + 1].from : lines.length;
+    const dx = f.x - pl.x;
+    const dy = f.y - (pl.y + lines[f.from].top - atom.top);
+    const style = `--sx:${+dx.toFixed(2)}px;--sy:calc(${+dy.toFixed(2)}px${sub(f.page - pl.page)})`;
+    for (const flow of flows) {
+      let from: number | undefined;
+      for (let i = f.from; i < f.to && from === undefined; i++) from = flow.starts[i];
+      if (from === undefined) continue;
+      let to: number | undefined;
+      for (let i = nextFrom; i < flow.starts.length && to === undefined; i++) to = flow.starts[i];
+      out.push(Decoration.inline(from, to ?? flow.end, { class: "col-shift", style }));
+    }
+    // A paragraph with a background or a border: the same frame behind each later run (a widget drawn out of the flow).
+    if (framed) {
+      const h = lines[f.to - 1].bottom - lines[f.from].top;
+      out.push(overlayWidget(pos + 1, -3, `frame:${pos}:${k}:${fk(dx, f.y - pl.y, h)}`, () => frame(ref.el, dx, f.y - pl.y, h)));
+    }
+  });
+  return out;
+}
+
+/** Display copy of the header rows of a table, drawn above a row (inside its first cell, which is positioned) at the top of a column. */
+function headerOverlay(headers: HTMLTableRowElement[], width: number, height: number): HTMLElement {
+  const table = document.createElement("table");
+  table.className = "col-header";
+  table.setAttribute("aria-hidden", "true");
+  table.contentEditable = "false";
+  table.style.cssText = `position:absolute;left:0;top:${-height}px;width:${width}px;margin:0;max-width:none;pointer-events:none;table-layout:fixed;`;
+  const source = headers[0]?.closest("table");
+  const colgroup = source?.querySelector("colgroup");
+  if (colgroup) table.append(colgroup.cloneNode(true));
+  const body = document.createElement("tbody");
+  for (const row of headers) {
+    const copy = row.cloneNode(true) as HTMLElement;
+    copy.className = "";
+    copy.removeAttribute("style");
+    copy.removeAttribute("data-col-top");
+    copy.removeAttribute("data-col-bottom");
+    copy.querySelectorAll("[contenteditable]").forEach((n) => n.removeAttribute("contenteditable"));
+    copy.querySelectorAll(".col-rowframe, .col-header, .col-frame, .pg-spacer").forEach((n) => n.remove());
+    body.append(copy);
+  }
+  table.append(body);
+  return table;
+}
+
+/** The frame of a shaded / bordered block inside a list item, for one run of its lines (relative to the list item's box). */
+function unitFrame(look: { left: number; width: number; css: string }, dx: number, top: number, height: number): HTMLElement {
+  return makeFrame("span", "col-frame", `${look.css};${boxCss(look.left + dx, top, look.width, height)}`);
+}
+
+/** One piece of a table cell inside a list item (relative to the item's box). */
+function cellFrame(c: { left: number; width: number; bg: string; border: string }, dx: number, top: number, height: number): HTMLElement {
+  return makeFrame("span", "col-frame", `${boxCss(c.left + dx, top, c.width, height)};${paintCss(c)}`);
+}
+
+/** The frames of the cells of a row, for one run of its lines (positions are relative to the row's first cell). */
+function rowFrames(cells: NonNullable<AtomRef["cells"]>, left: number, top: number, height: number): HTMLElement {
+  const box = makeFrame("div", "col-rowframe", "");
+  for (const c of cells) box.append(makeFrame("div", "col-rowframe-cell", `${boxCss(left + c.left, top, c.width, height)};${paintCss(c)}`));
+  return box;
+}
+
+/** A box at the place of a later run of lines, with the background and the borders of the paragraph it belongs to. */
+function frame(source: HTMLElement, left: number, top: number, height: number): HTMLElement {
+  const el = makeFrame("span", "col-frame", "");
+  const st = source.style;
+  for (const prop of [...FRAME_PROPS, "padding"] as const) if (st[prop]) el.style[prop] = st[prop];
+  if (source.dataset.colQuote !== undefined || source.closest("blockquote")) el.classList.add("col-frame-quote");
+  el.style.cssText += `;${boxCss(left, top, null, height)}`;
+  return el;
+}
+
+/** Position of the character under a point that lies on text moved by a column layout (`.col-shift` spans); null elsewhere. */
+function shiftedPosAtCoords(view: EditorView, coords: { left: number; top: number }): { pos: number; inside: number } | null {
+  const hit = document.elementsFromPoint(coords.left, coords.top).find((e) => e instanceof HTMLElement && e.classList.contains("col-shift") && e.tagName === "SPAN");
+  if (!hit || !view.dom.contains(hit)) return null;
+  const range = document.createRange();
+  let best: { node: Text; offset: number; dist: number } | null = null;
+  const walker = document.createTreeWalker(hit, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    range.selectNodeContents(n);
+    if (!Array.from(range.getClientRects()).some((r) => coords.top >= r.top && coords.top <= r.bottom && coords.left >= r.left - 1 && coords.left <= r.right + 1)) continue;
+    // The characters of a text node run line after line, top to bottom: look for the first one that is not above the point, then walk its line.
+    const rectAt = (i: number) => { range.setStart(n, i); range.setEnd(n, i + 1); return range.getClientRects()[0]; };
+    let lo = 0;
+    let hi = n.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; const r = rectAt(mid); if (r && r.bottom < coords.top) lo = mid + 1; else hi = mid; }
+    for (let i = lo; i < n.length; i++) {
+      const r = rectAt(i);
+      if (!r || r.width === 0) continue;
+      if (r.top > coords.top) break;
+      const dist = Math.abs(coords.left - (r.left + r.right) / 2);
+      if (!best || dist < best.dist) best = { node: n, offset: coords.left > (r.left + r.right) / 2 ? i + 1 : i, dist };
+    }
+  }
+  if (!best) return null;
+  try { return { pos: view.posAtDOM(best.node, best.offset), inside: -1 }; } catch { return null; }
+}
 
 /**
  * Each top-level block gets the left and right margin of its section (CSS variables used by the stylesheet), so that sections
@@ -210,7 +384,13 @@ function sectionMargins(doc: import("@tiptap/pm/model").Node, geoms: PageGeometr
       const textW = g.width - g.insetLeft - g.insetRight;
       right += textW - (textW - (g.columns.count - 1) * g.columns.gap) / g.columns.count;
     }
-    out.push(Decoration.node(off, off + n.nodeSize, { style: `--sec-l:${+left.toFixed(2)}px;--sec-r:${+right.toFixed(2)}px` }));
+    // Pictures in columns shrink to fit a column (width and height).
+    let fit = "";
+    if (g.columns && g.columns.count > 1) {
+      const textW = g.width - g.insetLeft - g.insetRight;
+      fit = `;--col-maxw:${+((textW - (g.columns.count - 1) * g.columns.gap) / g.columns.count).toFixed(2)}px;--col-maxh:${+(g.contentHeight - 8).toFixed(2)}px`;
+    }
+    out.push(Decoration.node(off, off + n.nodeSize, { style: `--sec-l:${+left.toFixed(2)}px;--sec-r:${+right.toFixed(2)}px${fit}`, ...(fit ? { "data-cols": "" } : {}) }));
   });
   return out;
 }
@@ -241,9 +421,11 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
     offset += b.net ?? b.spacer;
     const ref = refs[b.atom];
     const lines = b.line !== null ? atoms[b.atom].lines?.() : null;
-    const pos = b.line === null ? ref.pos : ref.lineStarts[b.line];
+    // The spacer of a column region goes before the table, not between its rows (the rows are drawn out of the flow).
+    const inTable = !!b.region && !!ref.table;
+    const pos = inTable ? ref.table!.pos : b.line === null ? ref.pos : ref.lineStarts[b.line];
     if (pos === undefined) continue;
-    const kind = b.line !== null ? "inline" : ref.kind === "row" ? "row" : "block";
+    const kind = b.line !== null ? "inline" : ref.kind === "row" && !inTable ? "row" : "block";
     const natural = b.line !== null && lines ? lines[b.line].top : atoms[b.atom].top;
     const key = `${kind}:${pos}`;
     const prev = merged.get(key);
@@ -277,28 +459,78 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
   const doc = view.state.doc;
   const blockDecos: Decoration[] = [];
   const boxes = new Set<number>();
+  const sheetOf = (page: number) => result.sheets[Math.min(page, result.sheets.length - 1)];
+  const sub = (pages: number) => (pages ? ` - ${pages} * var(--pg-print-sub, 0px)` : "");
+  const firstRow = new Map<number, number>(); // table position -> atom index of its first row
+  // Rows that end a column and rows that start the next one (an "outer border" table draws its top and bottom edges there).
+  const edgeTop = new Set<number>();
+  const edgeBottom = new Set<number>();
+  result.placements.forEach((pl, i) => {
+    const prev = result.placements[i - 1];
+    if (pl && prev && refs[i]?.table && refs[i - 1]?.table?.pos === refs[i].table!.pos && (pl.page !== prev.page || Math.round(pl.x) !== Math.round(prev.x))) { edgeTop.add(i); edgeBottom.add(i - 1); }
+  });
   result.placements.forEach((pl, i) => {
     if (!pl) return;
-    const pos = refs[i]?.pos;
+    const ref = refs[i];
+    const pos = ref?.pos;
     const node = pos === undefined ? null : doc.nodeAt(pos);
     if (!node) return;
-    const sheet = result.sheets[Math.min(pl.page, result.sheets.length - 1)];
+    const sheet = sheetOf(pl.page);
+    // A table row of a column section: the table sits at the slot of its first row, every other row is moved by its own offset.
+    if (ref.table) {
+      const tpos = ref.table.pos;
+      if (edgeTop.has(i) || edgeBottom.has(i)) blockDecos.push(Decoration.node(pos, pos + node.nodeSize, { ...(edgeTop.has(i) ? { "data-col-top": "" } : {}), ...(edgeBottom.has(i) ? { "data-col-bottom": "" } : {}) }));
+      if (ref.table.first) {
+        firstRow.set(tpos, i);
+        if (pl.frags && pl.frags.length > 1) { blockDecos.push(Decoration.node(pos, pos + node.nodeSize, { class: "col-rowcut" })); blockDecos.push(...fragmentDecos(atoms[i], ref, pl, pos, node.nodeSize, sub, false, ref.cells)); }
+        const table = doc.nodeAt(tpos);
+        if (table) {
+          const y = pl.y - (atoms[i].top - ref.table.top);
+          blockDecos.push(Decoration.node(tpos, tpos + table.nodeSize, { "data-col": "", "data-col-table": "", style: `--col-x:${+(sheet.left + sheet.insetLeft + pl.x).toFixed(2)}px;--col-y:calc(${+y.toFixed(2)}px${sub(pl.page)});--col-w:${+pl.width.toFixed(2)}px` }));
+        }
+      } else {
+        const j = firstRow.get(tpos);
+        const p0 = j === undefined ? null : result.placements[j];
+        if (j !== undefined && p0) {
+          const dx = pl.x - p0.x;
+          const dy = pl.y - p0.y - (atoms[i].top - atoms[j].top);
+          const cutRow = !!pl.frags && pl.frags.length > 1;
+          const shiftStyle = `--sx:${+dx.toFixed(2)}px;--sy:calc(${+dy.toFixed(2)}px${sub(pl.page - p0.page)})`;
+          blockDecos.push(Decoration.node(pos, pos + node.nodeSize, { class: `col-shift${cutRow ? " col-rowcut" : ""}`, style: shiftStyle }));
+          // The rows covered by a cell that spans rows move with it.
+          for (const gp of ref.groupRows ?? []) { const covered = doc.nodeAt(gp); if (covered) blockDecos.push(Decoration.node(gp, gp + covered.nodeSize, { class: "col-shift", style: shiftStyle })); }
+          blockDecos.push(...fragmentDecos(atoms[i], ref, pl, pos, node.nodeSize, sub, false, ref.cells));
+          // The table goes on at the top of a column: its header rows are shown again above this row.
+          if (pl.header && ref.headers.length) {
+            blockDecos.push(overlayWidget(pos + 2, -4, `colhead:${pos}:${pl.header!.toFixed(1)}:${ref.headers.map((h) => h.textContent).join("|")}`, () => headerOverlay(ref.headers, ref.table!.width, pl.header!)));
+          }
+        }
+      }
+      return;
+    }
     // Left and right indents of a paragraph come out of the width of its box (its margins are kept).
     const ind = (node.attrs.indentLeft || 0) + (node.attrs.indentRight || 0);
-    const lead = refs[i]?.indent ?? 0; // list items: the indent of their (flattened) list
+    const lead = ref?.indent ?? 0; // list items: the indent of their (flattened) list
     const width = Math.max(24, pl.width - lead - ind * (96 / 2.54));
     // The container of a list item or of a quote paragraph is not drawn any more: it only passes its children through.
-    if (refs[i]?.inContainer) {
+    if (ref?.inContainer) {
       const $p = doc.resolve(pos);
       const cpos = $p.before($p.depth);
       if (!boxes.has(cpos)) { boxes.add(cpos); blockDecos.push(Decoration.node(cpos, cpos + $p.parent.nodeSize, { "data-col-box": "" })); }
     }
-    const vars = [`--col-x:${+(sheet.left + sheet.insetLeft + pl.x + lead).toFixed(2)}px`, `--col-y:calc(${+pl.y.toFixed(2)}px - ${pl.page} * var(--pg-print-sub, 0px))`, `--col-w:${+width.toFixed(2)}px`];
-    if (pl.split) vars.push(`--col-m:${pl.split.columns}`, `--col-gap:${+pl.split.gap.toFixed(2)}px`, `--col-h:${+pl.split.height.toFixed(2)}px`, `--col-off:${+pl.split.offset.toFixed(2)}px`);
-    blockDecos.push(Decoration.node(pos, pos + node.nodeSize, { "data-col": "", ...(refs[i]?.inContainer === "quote" ? { "data-col-quote": "" } : {}), ...(pl.split ? { "data-col-split": "" } : {}), style: vars.join(";") }));
+    const vars = [`--col-x:${+(sheet.left + sheet.insetLeft + pl.x + lead).toFixed(2)}px`, `--col-y:calc(${+pl.y.toFixed(2)}px${sub(pl.page)})`, `--col-w:${+width.toFixed(2)}px`];
+    const cut = pl.frags && pl.frags.length > 1 ? pl.frags : null;
+    if (cut) {
+      // The box keeps the first run of lines; every later run is moved (relative offset of its text) to its own column or page.
+      const lines = atoms[i].lines?.() ?? [];
+      if (lines[cut[0].to - 1]) vars.push(`--col-h:${+(lines[cut[0].to - 1].bottom - atoms[i].top).toFixed(2)}px`);
+      const framed = ref.inContainer === "quote" || FRAME_PROPS.some((p) => ref.el.style[p]);
+      blockDecos.push(...fragmentDecos(atoms[i], ref, pl, pos, node.nodeSize, sub, framed));
+    }
+    blockDecos.push(Decoration.node(pos, pos + node.nodeSize, { "data-col": "", ...(ref?.inContainer === "quote" ? { "data-col-quote": "" } : {}), ...(cut ? { "data-col-cut": "" } : {}), style: vars.join(";") }));
   });
   const decos = DecorationSet.create(view.state.doc, [...widgets, ...blockDecos]);
-  const signature = `${signatureOf(result.pages, decos)}|${JSON.stringify(result.sheets.map((s) => [Math.round(s.top * 10), s.width, s.height, s.section]))}|${JSON.stringify(result.placements.map((p) => p && [p.page, Math.round(p.x), Math.round(p.y), Math.round(p.width), p.split?.columns ?? 0]))}|${JSON.stringify(result.bands.map((b) => [b.page, Math.round(b.top), Math.round(b.height)]))}`;
+  const signature = `${signatureOf(result.pages, decos)}|${JSON.stringify(result.sheets.map((s) => [Math.round(s.top * 10), s.width, s.height, s.section]))}|${JSON.stringify(result.placements.map((p) => p && [p.page, Math.round(p.x), Math.round(p.y), Math.round(p.width), p.frags?.map((f) => [f.from, f.page, Math.round(f.x), Math.round(f.y)]) ?? 0]))}|${JSON.stringify(result.bands.map((b) => [b.page, Math.round(b.top), Math.round(b.height)]))}`;
   const current = paginationKey.getState(view.state);
   if (current?.signature === signature && current.pages === result.pages) { window.dispatchEvent(new Event("loma:layout")); done(); return; }
   view.dispatch(view.state.tr.setMeta(paginationKey, { decos, pages: result.pages, sheets: result.sheets, bands: result.bands, signature }).setMeta("addToHistory", false));

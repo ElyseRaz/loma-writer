@@ -307,14 +307,29 @@ describe("columns", () => {
     expect(res.pages).toBeGreaterThanOrEqual(2);
   });
 
-  it("keeps the blocks of a column in order, one under the other", () => {
+  it("keeps the blocks of a column in order, one under the other (the last page is balanced: 2 then 1)", () => {
     const atoms = blocks([4, 4, 4]);
     const res = paginate(atoms, two);
     const ys = res.placements.map((p) => p!.y);
     expect(ys[1]).toBeGreaterThan(ys[0]);
-    expect(ys[2]).toBeGreaterThan(ys[1]);
     // gaps are the natural ones (10 px between blocks in `flow`)
     expect(ys[1] - (ys[0] + (atoms[0].bottom - atoms[0].top))).toBeCloseTo(10, 5);
+  });
+
+  it("balances to the line: 41 lines in two columns end 21 / 20", () => {
+    const atoms = flow([41]);
+    const res = paginate(atoms, two);
+    const fr = res.placements[0]!.frags!;
+    expect(fr.length).toBe(2);
+    expect(Math.abs((fr[0].to - fr[0].from) - (fr[1].to - fr[1].from))).toBeLessThanOrEqual(1);
+  });
+
+  it("a table row taller than a column is shared over columns and pages", () => {
+    const tall: Atom = { ...flow([200])[0], kind: "row" };
+    const res = paginate([tall], two);
+    const fr = res.placements[0]!.frags!;
+    expect(fr.length).toBeGreaterThanOrEqual(2);
+    expect(fr[fr.length - 1].to).toBe(200);
   });
 
   it("a column break sends what follows to the next column, then to the next page", () => {
@@ -333,19 +348,46 @@ describe("columns", () => {
     const atoms = flow([8, 60]); // 60 lines do not fit in the rest of column 1 but fit in two columns
     const res = paginate(atoms, two);
     const p = res.placements[1]!;
-    expect(p.split).toBeDefined();
-    expect(p.split!.columns).toBe(2);
-    expect(p.width).toBeCloseTo(2 * cw + two.columns!.gap, 5);
-    expect(p.split!.offset).toBeGreaterThan(0); // it starts below the first paragraph in column 1
-    expect(p.x).toBe(0);
+    expect(p.frags).toBeDefined();
+    expect(p.frags!.length).toBe(2);
+    expect(p.width).toBeCloseTo(cw, 5);
+    expect(p.frags![0].from).toBe(0);
+    expect(p.frags![0].to).toBe(p.frags![1].from);
+    expect(p.frags![1].to).toBe(60);
+    expect(p.y).toBeGreaterThan(0); // it starts below the first paragraph in column 1
+    expect(p.frags![1].x).toBeCloseTo(cw + two.columns!.gap, 5);
+    expect(p.frags![1].y).toBeCloseTo(0, 5); // the rest starts at the top of column 2
+    expect(p.frags![0].page).toBe(p.frags![1].page);
   });
 
-  it("does not split across pages: a paragraph that would need a third column goes to the next page", () => {
+  it("goes on across pages: a paragraph longer than a page of columns fills them all", () => {
     const atoms = flow([8, 400]);
     const res = paginate(atoms, two);
     const p = res.placements[1]!;
-    expect(p.split).toBeUndefined();
-    expect(p.page).toBeGreaterThanOrEqual(0);
+    const fr = p.frags!;
+    expect(fr.length).toBeGreaterThanOrEqual(4);
+    expect(fr[0].from).toBe(0);
+    for (let i = 1; i < fr.length; i++) expect(fr[i].from).toBe(fr[i - 1].to);
+    expect(fr[fr.length - 1].to).toBe(400);
+    expect(new Set(fr.map((f) => f.page)).size).toBeGreaterThanOrEqual(2);
+    // widows and orphans: no run of a single line at either end
+    expect(fr[0].to - fr[0].from).toBeGreaterThanOrEqual(2);
+    expect(fr[fr.length - 1].to - fr[fr.length - 1].from).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a paragraph that ends a page in the last column continues in the first column of the next page", () => {
+    const atoms = flow([40, 40, 40, 60]);
+    const res = paginate(atoms, two);
+    const fr = res.placements.flatMap((p) => p?.frags ?? []);
+    expect(fr.some((f) => f.x === 0 && f.page === 1)).toBe(true);
+  });
+
+  it("balances the columns of the last page at the end of the document", () => {
+    const atoms = blocks(Array(8).fill(10));
+    const res = paginate(atoms, two);
+    const bottom = (col: number) => Math.max(0, ...res.placements.map((p, i) => (p && (p.x === 0 ? 0 : 1) === col ? p.y + (atoms[i].bottom - atoms[i].top) : 0)));
+    expect(bottom(0)).toBeGreaterThan(0);
+    expect(Math.abs(bottom(0) - bottom(1))).toBeLessThan(2 * 10 * LH);
   });
 
   it("the spacer stands in for the region and the blocks after it follow the real end", () => {

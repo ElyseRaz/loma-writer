@@ -23,3 +23,12 @@ Scripts natifs : `native.js` (pagination), `native-home.js` (Accueil), `native-i
 4. **Retirer ces trois ajouts** avant de livrer.
 
 Le crochet `window.__lomaEditor` n'existe qu'en mode développement.
+
+
+## WebKitGTK (le moteur de l'application)
+
+`python3 e2e/webkit.py` (ou `npm run test:webkit`) charge l'application dans WebKitGTK (python3-gi, WebKit2 4.1, `npm run dev` sur :1420)
+et vérifie, dans le vrai moteur : le contrôle de chaque caractère (`audit.js`), puis un **vrai travail d'impression vers un PDF**
+(nombre de pages = nombre de feuilles, texte de chaque page). `LOMA_WK_KEEP=dossier` garde les PDF, `LOMA_WK_ONLY=n` ne joue que le
+scénario n, `LOMA_WK_PAPER=letter` et `LOMA_WK_MARGIN=5` changent le papier et les marges (un document A4 sur Letter échoue : limite connue). Nécessite `pdfinfo` / `pdftotext` (poppler-utils). Différences utiles avec Chrome : WebKit ignore le décalage relatif d'une
+ligne de tableau (on décale les cellules) et ignore la taille `@page` (le papier vient de la boîte d'impression).

@@ -56,6 +56,8 @@ export interface Atom {
   keepLines?: boolean;
   /** Table rows below a header row: height of the header rows repeated on top of a page this row starts. */
   repeat?: number;
+  /** Column sections: the table (position of its node) a row belongs to. */
+  tableId?: number;
   /** Section breaks: index of the section that starts after this atom. */
   section?: number;
   /** Section breaks: the next section continues on the same page (it can only change the columns). */
@@ -79,14 +81,27 @@ export interface PageBreak {
   region?: { margin: number; pages: number };
 }
 
+/** A run of lines of a text block placed in one column slot. */
+export interface Fragment {
+  /** First line and line after the last one (indices into the atom's lines). */
+  from: number;
+  to: number;
+  page: number;
+  x: number;
+  /** First fragment: top of the block. The others: where the top of their first line goes. */
+  y: number;
+}
+
 /** Where a block of a column region goes (engine coordinates; `x` is from the left of the text area). */
 export interface Placement {
   page: number;
   x: number;
   y: number;
   width: number;
-  /** The block is split over `columns` columns of the page: drawn as a small multi-column box starting `offset` px down the first one. */
-  split?: { columns: number; gap: number; offset: number; height: number };
+  /** The lines of the block are shared between several slots (columns, pages): the view moves each run of lines where it belongs. */
+  frags?: Fragment[];
+  /** Table row that continues a table at the top of a column: height kept above it for the repeated header rows. */
+  header?: number;
 }
 
 /** A vertical rule between the columns of one page. */

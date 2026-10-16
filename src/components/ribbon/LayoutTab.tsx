@@ -95,9 +95,9 @@ export function LayoutTab() {
           size="lg"
           label="Colonnes"
           items={[
-            ...[1, 2, 3].map((n) => ({ label: n === 1 ? "Une" : n === 2 ? "Deux" : "Trois", checked: (page.columns?.count ?? 1) === n, onSelect: () => setColumns(n) })),
+            ...[1, 2, 3].map((n) => ({ label: n === 1 ? "Une" : n === 2 ? "Deux" : "Trois", title: "S'applique à la section du curseur (pour une partie de la page : Autres colonnes…, « à partir d'ici »)", checked: (page.columns?.count ?? 1) === n, onSelect: () => setColumns(n) })),
             { separator: true as const },
-            { label: "Autres colonnes…", checked: (page.columns?.count ?? 1) > 3, onSelect: () => set({ dialog: "columns" }) },
+            { label: "Autres colonnes…", title: "Nombre, espace et ligne de séparation ; section, « à partir d'ici » ou tout le document", checked: (page.columns?.count ?? 1) > 3, onSelect: () => set({ dialog: "columns" }) },
           ]}
         />
         <DropdownButton
@@ -105,14 +105,14 @@ export function LayoutTab() {
           size="lg"
           label="Sauts"
           items={[
-            { label: "Saut de page", shortcut: "Ctrl+Entrée", onSelect: () => editor?.chain().focus().insertPageBreak().run() },
-            { label: "Saut de colonne", shortcut: "Ctrl+Maj+Entrée", onSelect: () => editor?.chain().focus().insertColumnBreak().run() },
-            { label: "Saut de section (page suivante)", onSelect: () => editor?.chain().focus().insertSectionBreak().run() },
-            { label: "Saut de section (continu)", onSelect: () => editor?.chain().focus().insertSectionBreak({ kind: "continuous" }).run() },
+            { label: "Saut de page", title: "Le texte suivant commence sur une nouvelle page", shortcut: "Ctrl+Entrée", onSelect: () => editor?.chain().focus().insertPageBreak().run() },
+            { label: "Saut de colonne", title: "Le texte suivant commence dans la colonne suivante ; dans une section à une colonne, équivaut à un saut de page", shortcut: "Ctrl+Maj+Entrée", onSelect: () => editor?.chain().focus().insertColumnBreak().run() },
+            { label: "Saut de section (page suivante)", title: "Nouvelle section sur une nouvelle page, avec son papier, ses marges et ses colonnes", onSelect: () => editor?.chain().focus().insertSectionBreak().run() },
+            { label: "Saut de section (continu)", title: "Nouvelle section sur la même page, par exemple pour changer le nombre de colonnes", onSelect: () => editor?.chain().focus().insertSectionBreak({ kind: "continuous" }).run() },
             { separator: true as const },
-            { label: "Saut de page avant ce paragraphe", checked: snap.layout.pageBreakBefore, onSelect: () => editor?.chain().focus().setParagraphLayout({ pageBreakBefore: !snap.layout.pageBreakBefore }).run() },
-            { label: "Garder avec le paragraphe suivant", checked: snap.layout.keepWithNext, onSelect: () => editor?.chain().focus().setParagraphLayout({ keepWithNext: !snap.layout.keepWithNext }).run() },
-            { label: "Garder les lignes ensemble", checked: snap.layout.keepLines, onSelect: () => editor?.chain().focus().setParagraphLayout({ keepLines: !snap.layout.keepLines }).run() },
+            { label: "Saut de page avant ce paragraphe", title: "Ce paragraphe commence toujours en haut d'une page", checked: snap.layout.pageBreakBefore, onSelect: () => editor?.chain().focus().setParagraphLayout({ pageBreakBefore: !snap.layout.pageBreakBefore }).run() },
+            { label: "Garder avec le paragraphe suivant", title: "Évite une coupure de page entre ce paragraphe et le suivant", checked: snap.layout.keepWithNext, onSelect: () => editor?.chain().focus().setParagraphLayout({ keepWithNext: !snap.layout.keepWithNext }).run() },
+            { label: "Garder les lignes ensemble", title: "Évite de couper ce paragraphe entre deux pages", checked: snap.layout.keepLines, onSelect: () => editor?.chain().focus().setParagraphLayout({ keepLines: !snap.layout.keepLines }).run() },
           ]}
         />
       </RibbonGroup>
