@@ -35,7 +35,8 @@ dans `src/components/dialogs/` (`CaptionDialog`, `NoteDialog`, `SourcesDialog`) 
   Le recommencement par page est calculé par la mise en page (`computePageNotes`). Exporté en `w:footnotePr` / `w:endnotePr` (DOCX) et `text:notes-configuration` (ODT).
 - **Colonnes** : la place des notes est retirée à toutes les colonnes de la page (`flow` du moteur). **Continuation** : les notes ne prennent pas plus d'une demi-page ; le reste
   continue en bas de la page suivante (`settle`, `PageNote.skip/clip`).
-- **Limites** : la coupure d'une note continuée se fait au pixel (pas à la ligne) ; en colonnes, une note géante qui déborde sur la page suivante n'est vérifiée que par le moteur.
+- Une note continuée est coupée **entre deux lignes** (hauteur d'une ligne mesurée par `makeNoteMeasurer.line`, passée au moteur en `noteLine`) ; le moteur ajoute une ligne de marge à ce qui continue.
+- **Limites** : la mise en page de Word peut différer de quelques lignes (autres polices de substitution).
 
 ## Citations et bibliographie
 

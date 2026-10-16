@@ -29,6 +29,7 @@ export function SourcesDialog() {
   const valid = !!candidate && (candidate.title || candidate.authors.length > 0);
   const close = () => set({ dialog: null, sourceEdit: null });
   const pick = (tag: string | null) => {
+    setConfirming(false);
     setSelected(tag);
     const s = tag ? list.find((x) => x.tag === tag) ?? blank() : blank();
     setDraft({ ...s });
@@ -46,8 +47,13 @@ export function SourcesDialog() {
     if (next && editor) editor.chain().focus().setSources(next).run();
     set((s) => ({ dialog: null, sourceEdit: null, doc: { ...s.doc, dirty: true } }));
   };
+  const [confirming, setConfirming] = useState(false);
+  // number of citations of the text that use the selected source
+  const uses = useMemo(() => { let n = 0; editor?.state.doc.descendants((node) => { if (node.type.name === "citation" && node.attrs.tag === selected) n++; return true; }); return n; }, [editor, selected]);
   const remove = () => {
     if (isNew) return;
+    if (!confirming) { setConfirming(true); return; }
+    setConfirming(false);
     const next = list.filter((s) => s.tag !== selected);
     setList(next);
     pick(next[0]?.tag ?? null);
@@ -56,19 +62,19 @@ export function SourcesDialog() {
     <label className={cn(lbl, width)}>{name}<input value={String(draft[key] ?? "")} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} className={cn(field, "mt-1 normal-case tracking-normal text-fg")} /></label>
   );
   return (
-    <Dialog title="Gérer les sources" icon={BookOpenText} onClose={close} width={760}
-      footer={<><Button onClick={close}>Annuler</Button><Button variant="primary" onClick={save} disabled={!valid && !isNew && false}>Enregistrer</Button></>}>
+    <Dialog title="Gérer les sources" icon={BookOpenText} onClose={close} width={760} backdropClose={false}
+      footer={<><Button onClick={close}>Annuler</Button><Button variant="primary" onClick={save} disabled={!valid && !(isNew && !draft.title && !authorsText.trim() && list.length > 0)}>Enregistrer</Button></>}>
       <div className="grid grid-cols-[230px_1fr] gap-0">
         <div className="flex max-h-[420px] flex-col border-r border-line">
-          <div className="flex-1 overflow-y-auto p-2">
+          <div className="flex-1 overflow-y-auto p-2" role="listbox" aria-label="Sources du document">
             {list.length === 0 && <p className="px-2 py-3 text-[12px] text-muted">Aucune source. Remplissez le formulaire pour ajouter la première.</p>}
             {list.map((s) => (
-              <button key={s.tag} onClick={() => { commit(); pick(s.tag); }} className={cn("mb-0.5 block w-full truncate rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-hover", selected === s.tag && "bg-accent-soft text-accent")} title={label(s)}>{label(s)}</button>
+              <button key={s.tag} role="option" aria-selected={selected === s.tag} onClick={() => { commit(); pick(s.tag); }} className={cn("mb-0.5 block w-full truncate rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-hover", selected === s.tag && "bg-accent-soft text-accent")} title={label(s)}>{label(s)}</button>
             ))}
           </div>
           <div className="flex gap-1 border-t border-line p-2">
             <Button onClick={() => { commit(); pick(null); }}><Plus size={13} /> Nouvelle</Button>
-            <Button onClick={remove} disabled={isNew}><Trash2 size={13} /> Supprimer</Button>
+            <Button onClick={remove} disabled={isNew} aria-label={confirming ? "Confirmer la suppression de la source" : "Supprimer la source"} title={confirming ? (uses ? `${uses} citation(s) du texte utilisent cette source (elles afficheront « [source manquante] »)` : "Cliquez encore pour supprimer") : "Supprime la source sélectionnée"}><Trash2 size={13} /> {confirming ? "Confirmer ?" : "Supprimer"}</Button>
           </div>
         </div>
         <div className="max-h-[420px] space-y-3 overflow-y-auto p-4">

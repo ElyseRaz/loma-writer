@@ -5,6 +5,8 @@ export interface EngineOptions {
   orphans?: number;
   /** Minimum lines of a paragraph carried to the top of the next page. */
   widows?: number;
+  /** Height of one line of a note: a note that goes on over the next page is cut between lines. */
+  noteLine?: number;
 }
 
 const EPS = 0.5;
@@ -40,17 +42,20 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
   /** What the page still has to give up for `add` more px of notes (the first note also brings the separator). */
   const noteCost = (p: number, add: number) => (add > 0 ? add + (res(p) === 0 ? FOOTNOTE_SEPARATOR : 0) : 0);
   /** Notes may take half a page at most; what is more goes on at the bottom of the next page (their continuation). */
+  const noteLine = options.noteLine && options.noteLine > 1 ? options.noteLine : 0;
   const settle = (map: Map<number, number>, p: number) => {
-    const cap = 0.5 * H;
+    // room for notes: half a page, a whole number of lines under the separator
+    const cap = noteLine ? FOOTNOTE_SEPARATOR + Math.floor((0.5 * H - FOOTNOTE_SEPARATOR) / noteLine) * noteLine : 0.5 * H;
     for (let q = p, guard = 0; guard < 50; q++, guard++) {
       const v = map.get(q) ?? 0;
       if (v <= cap + EPS) return;
       map.set(q, cap);
-      map.set(q + 1, (map.get(q + 1) ?? 0) + (v - cap) + ((map.get(q + 1) ?? 0) === 0 ? FOOTNOTE_SEPARATOR : 0));
+      // what is left goes on at the bottom of the next page (a line more: the cut falls between lines)
+      map.set(q + 1, (map.get(q + 1) ?? 0) + (v - cap) + noteLine + ((map.get(q + 1) ?? 0) === 0 ? FOOTNOTE_SEPARATOR : 0));
     }
   };
   /** What of a cost must fit on the page itself: the rest of a huge note goes on to the next page. */
-  const fitCost = (p: number, cost: number) => Math.min(cost, Math.max(0, 0.5 * H - res(p)));
+  const fitCost = (p: number, cost: number) => Math.min(cost, Math.max(0, 0.5 * H - noteLine - res(p)));
   const reserve = (p: number, cost: number) => { if (cost > 0) { reserved.set(p, res(p) + cost); settle(reserved, p); } };
   const sumNotes = (a: Atom, from: number, to: number) => { const nh = a.noteHeights?.(); if (!nh) return 0; let s = 0; for (let k = from; k < to && k < nh.length; k++) s += nh[k] || 0; return s; };
 
@@ -153,7 +158,7 @@ export function paginate(atoms: Atom[], geometry: PageGeometry | PageGeometry[],
             if (n.kind === "text" && n.lines) { const ls = n.lines(); if (ls.length > orphans) follow = ls[orphans - 1].bottom - n.top; }
             need = gap + h + head + Math.max(0, n.top - a.bottom) + follow;
           }
-          const fitNote = Math.min(wholeCost, Math.max(0, 0.5 * H - lr(p)));
+          const fitNote = Math.min(wholeCost, Math.max(0, 0.5 * H - noteLine - lr(p)));
           if (need + fitNote <= room + EPS && (fitNote === 0 || maxUsed + fitNote <= cap(p) + EPS)) {
             if (wholeCost) { loc.set(p, lr(p) + wholeCost); settle(loc, p); }
             placed = startLine > 0

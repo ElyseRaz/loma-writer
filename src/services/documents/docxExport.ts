@@ -120,7 +120,7 @@ function inline(ctx: Ctx, nodes: PM[] = []): ParagraphChild[] {
         out.push(new TextRun({ text: ctx.raw.add("ENDREF", `<w:r><w:rPr><w:rStyle w:val="EndnoteReference"/></w:rPr><w:endnoteReference w:id="${ctx.endnotes.length}"/></w:r>`) }));
       } else {
         const id = Object.keys(ctx.footnotes).length + 1;
-        ctx.footnotes[id] = { children: (body.length ? body : [{ type: "paragraph" as const, content: [] }]).map((p) => new Paragraph({ style: "FootnoteText", children: inline(ctx, p.content as PM[]) })) };
+        ctx.footnotes[id] = { children: (body.length ? body : [{ type: "paragraph" as const, content: [] }]).map((p, k) => new Paragraph({ style: "FootnoteText", children: [...(k === 0 ? [new TextRun({ text: " ", })] : []), ...inline(ctx, p.content as PM[])] })) };
         out.push(new FootnoteReferenceRun(id));
       }
     }

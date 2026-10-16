@@ -464,7 +464,7 @@ select {
 .paper .ProseMirror .seq-field { font-style: inherit; }
 
 /* Notes: the raised number in the text, and the block of endnotes at the end of the document. */
-.paper .ProseMirror .note-ref { vertical-align: super; font-size: 0.72em; line-height: 0; color: #1d4ed8; cursor: pointer; padding: 0 1px; }
+.paper .ProseMirror .note-ref { vertical-align: super; font-size: 0.8em; line-height: 0; color: #1d4ed8; cursor: pointer; padding: 0 1px; }
 .paper .ProseMirror .endnotes { margin-top: 1.6em; border-top: 1px solid #9ca3af; padding-top: 0.5em; }
 .paper .ProseMirror .endnotes::before { content: attr(data-title); display: block; margin-bottom: 0.4em; font-size: 13pt; font-weight: 600; }
 .paper .ProseMirror .endnote-item { display: flex; gap: 0.5em; margin: 0 0 0.25em; font-size: 0.88em; line-height: 1.4; }

@@ -29,7 +29,7 @@ export function Dialog({ title, icon: Icon, onClose, children, footer, width = 5
 
   useEffect(() => {
     const focusables = () =>
-      [...(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input, select, [href], [tabindex]:not([tabindex="-1"])') ?? [])];
+      [...(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input, select, textarea, [contenteditable="true"], [href], [tabindex]:not([tabindex="-1"])') ?? [])];
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") return onClose();
       if (e.key !== "Tab") return;
@@ -47,8 +47,9 @@ export function Dialog({ title, icon: Icon, onClose, children, footer, width = 5
   // Initial focus: first form field if any, otherwise the primary action.
   useEffect(() => {
     const root = panel.current;
-    const items = root?.querySelectorAll<HTMLElement>("button:not([disabled]), input, select");
-    (root?.querySelector<HTMLElement>("input, select") ?? (items && items[items.length - 1]))?.focus();
+    if (!root || root.contains(document.activeElement)) return; // a field that took focus itself (autofocus) keeps it
+    const items = root.querySelectorAll<HTMLElement>("button:not([disabled]), input, select");
+    (root.querySelector<HTMLElement>('input, select, textarea, [contenteditable="true"]') ?? items[items.length - 1])?.focus();
   }, []);
 
   return createPortal(

@@ -54,6 +54,8 @@ interface Storage {
   pageNotes: Record<number, PageNote[]>;
   /** Room the last layout kept at the bottom of each page for its notes (separator included). */
   pageReserved: number[];
+  /** Height of one line of a note (the continuation of a note is cut between lines). */
+  noteLine: number;
 }
 
 /** A footnote as shown at the bottom of its page. */
@@ -141,7 +143,7 @@ export const Pagination = Extension.create({
   name: "pagination",
 
   addStorage(): Storage {
-    return { geometry: null, geometries: [], scale: 1, dirty: false, pageStarts: [], pageNotes: {}, pageReserved: [] };
+    return { geometry: null, geometries: [], scale: 1, dirty: false, pageStarts: [], pageNotes: {}, pageReserved: [], noteLine: 0 };
   },
 
   addProseMirrorPlugins() {
@@ -360,7 +362,7 @@ function frame(source: HTMLElement, left: number, top: number, height: number): 
 }
 
 /** Height a footnote takes at the bottom of a page of the width of each section (measured in a hidden copy of the note's style). */
-function makeNoteMeasurer(view: EditorView, widths: number[], scale: number): { height: (note: Record<string, unknown>, section: number) => number; dispose: () => void } {
+function makeNoteMeasurer(view: EditorView, widths: number[], scale: number): { height: (note: Record<string, unknown>, section: number) => number; line: () => number; dispose: () => void } {
   const host = view.dom.parentElement;
   let probe: HTMLElement | null = null;
   const cache = new Map<string, number>();
@@ -384,6 +386,10 @@ function makeNoteMeasurer(view: EditorView, widths: number[], scale: number): { 
       const h = probe.getBoundingClientRect().height / scale;
       cache.set(key, h);
       return h;
+    },
+    /** Height of a note of one line (the line height of the notes). */
+    line() {
+      return this.height({ label: "1", body: [{ type: "paragraph", content: [{ type: "text", text: "x" }] }] }, 0);
     },
     dispose: () => probe?.remove(),
   };
@@ -459,8 +465,10 @@ function computePageNotes(view: EditorView, storage: Storage) {
           const skip = it.skip ?? 0;
           const h = full - skip;
           if (queue.length === 0 && (used + h <= room + 1 || pg >= pages - 1)) { shown.push(skip ? { ...it, skip, clip: h } : it); used += h; continue; }
-          const vis = queue.length === 0 ? Math.max(0, room - used) : 0;
-          if (vis > 8) { shown.push({ ...it, skip, clip: vis }); used += vis; }
+          const line = storage.noteLine || 0;
+          const left = Math.max(0, room - used);
+          const vis = queue.length === 0 ? (line ? Math.floor(left / line) * line : left) : 0;
+          if (vis >= (line || 8)) { shown.push({ ...it, skip, clip: vis }); used += vis; }
           queue.push({ ...it, skip: skip + vis });
         }
         next[pg] = shown;
@@ -547,7 +555,8 @@ function layout(view: EditorView, storage: Storage, done: () => void) {
     const notes = makeNoteMeasurer(view, geoms.map((g) => g.width - g.insetLeft - g.insetRight), scale);
     try {
       ({ atoms, refs } = collectAtoms(view, origin, scale, storage.geometries.map((g) => !!g.columns && g.columns.count > 1), notes.height));
-      result = paginate(atoms, storage.geometries.length ? storage.geometries : geom);
+      storage.noteLine = notes.line();
+      result = paginate(atoms, storage.geometries.length ? storage.geometries : geom, { noteLine: storage.noteLine });
     } finally {
       notes.dispose();
     }

@@ -82,6 +82,12 @@ export async function addEndnotes(bytes: Uint8Array, notes: NoteParagraph[][], o
     const rels = await zip.file(relsPath)!.async("string");
     if (!rels.includes("relationships/endnotes")) zip.file(relsPath, rels.replace("</Relationships>", '<Relationship Id="rIdLomaEndnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/></Relationships>'));
   }
+  // Word writes the separators of the notes with a bare separator run (the library adds a note reference to them).
+  const footnotesXml = await zip.file("word/footnotes.xml")?.async("string");
+  if (footnotesXml) {
+    const clean = footnotesXml.replace(/(<w:footnote [^>]*w:type="(?:separator|continuationSeparator)"[^>]*>)([\s\S]*?)(<\/w:footnote>)/g, (_m, a: string, b: string, c: string) => `${a}${b.replace(/<w:r><w:rPr><w:rStyle w:val="FootnoteReference"\/><\/w:rPr><w:footnoteRef\/><\/w:r>/g, "").replace(/<w:pPr>[\s\S]*?<\/w:pPr>/, "")}${c}`);
+    if (clean !== footnotesXml) zip.file("word/footnotes.xml", clean);
+  }
   const settings = await zip.file("word/settings.xml")?.async("string");
   if (settings) {
     let patched = settings;

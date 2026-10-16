@@ -241,6 +241,8 @@ await settle(1500);
 const cont = await run(() => [...document.querySelectorAll(".page-sheet")].map((s) => [...s.querySelectorAll(".footnote-item")].length));
 ok(cont.filter((n) => n > 0).length >= 2, `a very long note goes on over the next page (${cont})`);
 ok((await run(() => window.__lomaAudit())).problems.length === 0, "and nothing overlaps", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
+const cut = await run(() => { const lh = window.__lomaEditor.storage.pagination.noteLine; return { lh, heights: [...document.querySelectorAll(".footnote-cut")].map((n) => n.offsetHeight) }; });
+ok(cut.heights.length >= 1 && cut.heights.every((h) => Math.abs(h / cut.lh - Math.round(h / cut.lh)) < 0.05), `a continued note is cut between lines (${cut.heights.map((h) => (h / cut.lh).toFixed(2))} lines)`);
 // notes in a section with columns do not hide the end of the columns
 await run((a) => { const e = window.__lomaEditor; e.commands.setContent(a); e.commands.setTextSelection(1); }, `<p>${lorem.repeat(30)}</p>`);
 await settle(600);
@@ -251,6 +253,10 @@ await page.getByRole("button", { name: /Insère une note en bas de la page/ }).c
 await page.getByRole("dialog").getByLabel("Texte de la note").fill("Note dans les colonnes. ".repeat(8));
 await page.getByRole("dialog").getByRole("button", { name: "Insérer" }).click();
 await settle(1500);
+await run((a) => { const e = window.__lomaEditor; e.commands.insertNote({ kind: "foot", text: a }); }, huge.repeat(8));
+await settle(1800);
+const colCont = await run(() => [...document.querySelectorAll(".page-sheet")].map((s) => s.querySelectorAll(".footnote-item").length));
+ok(colCont.filter((n) => n > 0).length >= 2, `a very long note in columns goes on over the next page (${colCont})`);
 ok((await run(() => window.__lomaAudit())).problems.length === 0, "a note in a section with columns keeps its room", (await run(() => window.__lomaAudit())).problems.slice(0, 2).join("|"));
 
 // --- undo ---
